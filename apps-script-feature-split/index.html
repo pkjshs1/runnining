@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>러닝 챌린지 <?= appVersion ?></title>
+  <style>
+    <?!= include('CSS'); ?>
+  </style>
+</head>
+<body>
+  <div class="bubble b1"></div>
+  <div class="bubble b2"></div>
+  <div class="bubble b3"></div>
+
+  <main id="app" class="wrap">
+    <section class="hero">
+      <div class="kicker"><span>🌷 우리들의 러닝 챌린지</span><span class="update-date" id="updateDate"><?= updateLabel ?></span></div>
+      <h1>오늘의 러닝을 인증해요</h1>
+      <p class="sub">닉네임을 고르고 러닝 캡처를 올리면 거리·시간·페이스가 바로 기록됩니다.</p>
+    </section>
+
+    <details id="nicknameSection" class="card fold-card nickname-section" open>
+      <summary class="fold-summary">
+        <span class="fold-summary-text">
+          <strong>👥 닉네임 선택하기</strong>
+          <small>러닝 인증, 번개 모임 참석 체크에 사용할 내 닉네임을 먼저 골라주세요.</small>
+        </span>
+        <span class="fold-icon">⌄</span>
+      </summary>
+      <div class="fold-content">
+        <div class="join-box">
+          <input id="nickname" type="text" maxlength="16" placeholder="새 닉네임 만들기" />
+          <button id="joinBtn" class="primary-btn" onclick="registerNickname()">등록</button>
+        </div>
+        <div class="tiny">처음이면 닉네임을 만들고, 다음부터는 내 닉네임을 클릭하면 바로 인증할 수 있어요.<br />이번 주 기록은 닉네임 선택 후 기록 보기 버튼에서 확인할 수 있습니다.</div>
+        <div id="runnerList" class="runner-list"></div>
+        <div id="selectedRunnerTools" class="selected-tools"></div>
+        <div id="personalStats" class="personal-stats"></div>
+      </div>
+    </details>
+
+    <section class="grid action-grid">
+      <details id="uploadAccordion" class="card upload-area fold-card" open>
+        <summary class="fold-summary">
+          <span class="fold-summary-text">
+            <strong>👟 러닝 인증하기</strong>
+            <small>러닝 캡처 업로드, AI 자동 인식, 수동 입력, 내 기록 수정까지 하는 곳이에요.</small>
+          </span>
+          <span class="fold-icon">⌄</span>
+        </summary>
+        <div class="fold-content">
+
+        <label class="file-zone" for="file">
+          <input id="file" type="file" accept="image/*" />
+          <div>
+            <div class="upload-icon">📸</div>
+            <div class="upload-main">러닝 캡처 선택하기</div>
+            <div class="upload-sub">아이폰 피트니스, 애플워치, 삼성헬스, 가민, 스트라바 등<br />거리와 시간이 크게 보이는 화면이면 좋아요.</div>
+          </div>
+        </label>
+
+        <div id="preview" class="preview"><img id="previewImg" alt="러닝 캡처 미리보기" /></div>
+        <div id="imageMeta" class="meta"></div>
+
+        <button id="submitBtn" class="submit-btn" disabled>AI 자동 인식으로 저장하기</button>
+        <button id="manualBtn" class="manual-btn" disabled onclick="startManualEntry()">수동 입력으로 저장하기</button>
+        <div id="status" class="status"></div>
+        <div id="result" class="result-grid"></div>
+
+        <p class="tiny">정확도를 위해 거리·시간·페이스가 보이는 단일 운동 기록 화면을 올려주세요.<br />AI 자동 인식과 수동 입력 중 편한 방식을 골라 저장할 수 있습니다.</p>
+
+        <details id="myRecordsPanel" class="admin-panel">
+          <summary>📝 내 기록 수정/삭제</summary>
+          <div class="tiny">닉네임을 선택하면 내 최근 기록을 직접 수정하거나 삭제할 수 있습니다.</div>
+          <div class="admin-actions">
+            <button class="soft-btn secondary" onclick="loadMyRecords()">내 최근 기록 불러오기</button>
+            <button class="soft-btn" onclick="refreshDashboardOnly()">대시보드 새로고침</button>
+          </div>
+          <div id="myRecordsList" class="tiny"></div>
+        </details>
+        </div>
+      </details>
+    </section>
+
+    <section class="card dashboard-card">
+      <div class="card-title">
+        <h2>러닝 대시보드</h2>
+        <div class="step">📊</div>
+      </div>
+      <div id="dashboard" class="dashboard-list"><div class="empty">대시보드를 불러오는 중...</div></div>
+    </section>
+
+    <details id="announcementFold" class="card fold-card notice-fold" aria-label="번개 모임">
+      <summary class="fold-summary">
+        <span class="fold-summary-text">
+          <strong>⚡ 번개 모임</strong>
+          <small id="announcementExpire">날짜와 시간 선택 가능</small>
+        </span>
+        <span class="fold-icon">⌄</span>
+      </summary>
+      <div class="fold-content">
+        <div id="announcementBanner" class="notice-banner empty">등록된 번개 모임이 없어요.</div>
+        <div class="notice-form lightning-form">
+          <label class="lightning-field">날짜
+            <input id="announcementDate" class="notice-input" type="date" aria-label="번개 모임 날짜" />
+          </label>
+          <label class="lightning-field">시간
+            <select id="announcementTime" class="notice-input" aria-label="번개 모임 시간"></select>
+          </label>
+          <label class="lightning-field">장소
+            <input id="announcementLocation" class="notice-input" type="text" maxlength="80" placeholder="예: 올림픽공원 만남의 광장" />
+          </label>
+          <label class="lightning-field wide">간단 메모
+            <input id="announcementMemo" class="notice-input" type="text" maxlength="160" placeholder="예: 5km 가볍게 뛰고 커피 한 잔" />
+          </label>
+          <button class="primary-btn" type="button" onclick="submitAnnouncement()">등록</button>
+        </div>
+        <div class="lightning-help">날짜와 시간은 선택하고, 장소만 적으면 바로 번개 모임을 열 수 있어요.</div>
+        <div id="announcementMeta" class="notice-meta"></div>
+        <div id="lightningAttendance" class="lightning-rsvp"></div>
+      </div>
+    </details>
+
+    <details id="weeklyProofSection" class="card fold-card weekly-proof-section">
+      <summary class="fold-summary">
+        <span class="fold-summary-text">
+          <strong>🤳 이번 주 러닝 인증샷</strong>
+          <small>이번 주에 올린 러닝 분위기 사진을 열어보고, 내가 올린 사진은 삭제할 수 있어요.</small>
+        </span>
+        <span class="fold-icon">⌄</span>
+      </summary>
+      <div class="fold-content">
+        <div id="weeklyProofMeta" class="tiny"></div>
+        <div class="optional-upload-wrap">
+          <label class="file-zone optional-file-zone" for="proofFile">
+            <input id="proofFile" type="file" accept="image/*" />
+            <div>
+              <div class="upload-icon">🤳</div>
+              <div class="upload-main">러닝 인증샷 선택하기</div>
+              <div class="upload-sub">달린 뒤 내 모습이나 러닝 분위기를 담은 사진이에요.<br />사진을 고른 뒤 러닝 기록을 저장하면 이번 주 인증샷 모음에 올라가요.</div>
+            </div>
+          </label>
+          <div id="proofPreview" class="proof-preview"><img id="proofPreviewImg" alt="러닝 인증샷 미리보기" /></div>
+          <div id="proofMeta" class="meta"></div>
+          <label id="proofPublicRow" class="consent-row">
+            <input id="proofPublic" type="checkbox" />
+            <span>이 인증샷을 이번 주 러닝 인증샷 모음에 공개할게요.</span>
+          </label>
+          <div class="tiny proof-upload-note">이 사진은 선택 사항이에요. 러닝 기록 저장 없이 사진만 단독 저장되지는 않아요.</div>
+        </div>
+
+      <div id="weeklyProofGallery" class="proof-gallery weekly-proof-gallery">
+        <div class="empty">이번 주 러닝 인증샷을 불러오는 중...</div>
+      </div>
+    
+      </div>
+    </details>
+
+    
+
+    <details id="adminPanel" class="card fold-card admin-bottom-section bottom-section-card">
+          <summary class="fold-summary"><span class="fold-summary-text"><strong>관리자</strong><small>운영자 전용</small></span><span class="fold-icon">⌄</span></summary>
+          <div class="tiny">운영자만 사용하는 영역입니다. Script Properties의 ADMIN_CODE를 입력하면 열립니다.</div>
+          <div class="manual-grid">
+            <label class="wide">관리자 코드
+              <input id="adminCode" type="password" placeholder="ADMIN_CODE" />
+            </label>
+            <label>일괄 목표(km)
+              <input id="adminGoalKm" type="number" inputmode="decimal" min="0.1" max="300" step="0.1" placeholder="예: 10" />
+            </label>
+          </div>
+          <div class="admin-actions">
+            <button class="soft-btn" onclick="loadAdminData()">관리자 열기</button>
+            <button class="soft-btn secondary" onclick="adminSetAllGoals()">목표 일괄 변경</button>
+            <button class="soft-btn secondary" onclick="adminRefreshDashboard()">대시보드 재계산</button>
+            <button class="soft-btn secondary" onclick="adminDownloadBackup()">전체 CSV 백업</button>
+          </div>
+          <div id="adminConsole" class="admin-console tiny"></div>
+        </details>
+</main>
+
+  <div id="announcementPopup" class="notice-popup-backdrop" role="dialog" aria-modal="true" aria-labelledby="announcementPopupTitle">
+    <div class="notice-popup">
+      <div class="notice-popup-title">
+        <span id="announcementPopupTitle">⚡ 번개 모임</span>
+        <span id="announcementPopupExpire" class="notice-expire">날짜/시간 확인</span>
+      </div>
+      <div id="announcementPopupBody" class="notice-popup-body"></div>
+      <div class="notice-popup-actions">
+        <button class="primary-btn" type="button" onclick="closeAnnouncementPopup()">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.APP_VERSION = '<?= appVersion ?>';
+  </script>
+  <?!= include('JS_State'); ?>
+  <?!= include('JS_Main'); ?>
+  <?!= include('JS_Dashboard'); ?>
+  <?!= include('JS_Admin'); ?>
+  <?!= include('JS_Utils'); ?>
+</body>
+</html>
