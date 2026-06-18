@@ -1,0 +1,1076 @@
+<script>
+function renderDashboard(data) {
+      const box = $('dashboard');
+      const dashboard = normalizeDashboard(data);
+      state.dashboard = dashboard;
+      if (typeof renderSelectedRunnerTools === 'function') renderSelectedRunnerTools();
+      if (dashboard && dashboard.memberStatuses) state.memberStatuses = dashboard.memberStatuses || {};
+      if (!dashboard) {
+        box.innerHTML = '<div class="empty">아직 기록이 없어요.<br />첫 러닝을 인증해보세요 🌱</div>';
+        renderWeeklyProofPhotos(null);
+        renderPersonalStats();
+        return;
+      }
+      const rankingsHtml = renderRankings(dashboard);
+      const todayRows = (dashboard.todayRecords || []).length ? dashboard.todayRecords : (dashboard.todayRunnerTotals || []);
+      const weeklyRows = Array.isArray(dashboard.weeklyProgress) ? dashboard.weeklyProgress : [];
+      const activeWeeklyRows = weeklyRows.filter(row => Number(row.distanceKm || 0) > 0 || Number(row.count || 0) > 0);
+      const todayKm = sumDashboardNumber_(todayRows, 'distanceKm');
+      const todayRuns = sumDashboardCount_(todayRows, true);
+      const todayTime = sumDashboardSeconds_(todayRows);
+      const weeklyKm = sumDashboardNumber_(weeklyRows, 'distanceKm');
+      const weeklyRuns = sumDashboardCount_(weeklyRows, false);
+      const weeklyGoalKm = weeklyRows.reduce((sum, row) => sum + Number(row.goalKm || dashboard.weeklyGoalKm || 0), 0);
+      const weeklyPercent = weeklyGoalKm ? Math.round((weeklyKm / weeklyGoalKm) * 1000) / 10 : 0;
+      const activeRecordView = state.dashboardRecordView === 'weekly' ? 'weekly' : 'today';
+      const mood = dashboard.groupMood || {};
+      const seasonText = dashboard.weekSeasonLabel || makeLocalWeekSeasonLabel(dashboard.weekStart || dashboard.today);
+      const closingNotice = dashboard.closingNotice || makeLocalWeeklyClosingNotice(dashboard, weeklyRows);
+      const contextHtml = `
+        <div class="dashboard-context-strip">
+          <span>🌼 ${escapeHtml(seasonText || '이번 주 러닝')}</span>
+          ${closingNotice ? `<strong>${escapeHtml(closingNotice)}</strong>` : '<strong>오늘도 가볍게 한 걸음씩 쌓아가요.</strong>'}
+        </div>
+      `;
+      const moodNoteHtml = `
+        <div class="record-note">
+          <strong>${escapeHtml(mood.moodEmoji || '🌿')} ${escapeHtml(mood.moodTitle || '이번 주 분위기')}</strong>
+          <span>${escapeHtml(mood.moodMessage || '이번 주 기록을 차곡차곡 모으는 중이에요.')}</span>
+        </div>
+      `;
+
+      const todayHtml = `
+        <div class="simple-dashboard-grid">
+          ${simpleDashboardMetric('오늘 거리', `${todayKm.toFixed(2)}km`)}
+          ${simpleDashboardMetric('오늘 인증', `${todayRuns}회`)}
+          ${simpleDashboardMetric('오늘 시간', secondsToDuration(todayTime) || '-')}
+        </div>
+        <div class="simple-record-list">
+          ${todayRows.length ? todayRows.slice(0, 6).map(simpleDailyRecord).join('') : cuteEmptyState('☀️', '오늘의 첫 러너를 기다리는 중이에요', '러닝 인증하기에서 오늘 기록을 올리면 바로 여기에 보여요.')}
+        </div>
+      `;
+
+      const weeklyHtml = `
+        ${contextHtml}
+        ${moodNoteHtml}
+        <div class="simple-dashboard-grid">
+          ${simpleDashboardMetric('이번 주 거리', `${weeklyKm.toFixed(2)}km`)}
+          ${simpleDashboardMetric('참여 멤버', `${activeWeeklyRows.length}/${Number(dashboard.totalParticipants || weeklyRows.length || 0)}명`)}
+          ${simpleDashboardMetric('목표 달성률', `${weeklyPercent.toFixed(1)}%`)}
+          ${simpleDashboardMetric('인증 횟수', `${weeklyRuns}회`)}
+        </div>
+        ${weeklyGoalKm ? groupGoalProgressHtml(weeklyPercent, weeklyKm, weeklyGoalKm) : ''}
+        <div class="simple-record-list">
+          ${activeWeeklyRows.length ? activeWeeklyRows.slice().sort((a, b) => Number(b.distanceKm || 0) - Number(a.distanceKm || 0)).slice(0, 8).map(simpleWeeklyProgressCard).join('') : cuteEmptyState('🌱', '이번 주 기록이 아직 없어요', '첫 인증이 올라오면 주간 누적과 목표 진행률이 자동으로 채워져요.')}
+        </div>
+      `;
+
+      box.innerHTML = `
+        <section class="dash-section simple-dashboard-section">
+          <div class="dash-heading"><span>💫 러닝 대시보드</span><small>${escapeHtml(dashboard.today || '')} · ${escapeHtml(dashboard.weekLabel || '')}</small></div>
+        </section>
+        <section class="dashboard-record-card">
+          <div class="dashboard-record-switch" role="tablist" aria-label="러닝 기록 기간 선택">
+            <button type="button" role="tab" class="dashboard-record-tab ${activeRecordView === 'today' ? 'active' : ''}" aria-selected="${activeRecordView === 'today'}" onclick="setDashboardRecordView('today')">
+              <strong>☀️ 오늘 기록</strong>
+              <small>${todayRows.length ? todayRows.length + '명 · ' + todayKm.toFixed(2) + 'km' : '아직 기록 없음'}</small>
+            </button>
+            <button type="button" role="tab" class="dashboard-record-tab ${activeRecordView === 'weekly' ? 'active' : ''}" aria-selected="${activeRecordView === 'weekly'}" onclick="setDashboardRecordView('weekly')">
+              <strong>🌈 주간 기록</strong>
+              <small>${weeklyKm.toFixed(2)}km · ${weeklyRuns}회</small>
+            </button>
+          </div>
+          <div class="dashboard-record-content">
+            ${activeRecordView === 'today' ? todayHtml : weeklyHtml}
+          </div>
+        </section>
+        ${dashboardAccordion('rankings', '🏆 주간/전체 랭킹 TOP 5', state.rankTab === 'week' ? '이번 주' : '전체 기록', rankingsHtml)}
+      `;
+      renderWeeklyProofPhotos(dashboard);
+      renderPersonalStats();
+      ensureSelectedPersonalStatsLoaded(false);
+      window.clearTimeout(state.proofLoadTimer);
+      state.proofLoadTimer = window.setTimeout(loadDashboardProofImages, 90);
+    }
+
+    function sumDashboardNumber_(rows, key) {
+      return (rows || []).reduce((sum, row) => sum + Number(row && row[key] || 0), 0);
+    }
+
+    function sumDashboardCount_(rows, defaultToOne) {
+      return (rows || []).reduce((sum, row) => {
+        const count = Number(row && row.count || 0);
+        return sum + (defaultToOne ? Math.max(1, count || 1) : count);
+      }, 0);
+    }
+
+    function sumDashboardSeconds_(rows) {
+      return (rows || []).reduce((sum, row) => sum + Number(row && row.durationSeconds || 0), 0);
+    }
+
+    function simpleDashboardMetric(label, value) {
+      return `<div class="simple-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function cuteEmptyState(icon, title, text) {
+      return `
+        <div class="cute-empty">
+          <span>${escapeHtml(icon || '🌷')}</span>
+          <strong>${escapeHtml(title || '아직 기록이 없어요')}</strong>
+          <small>${escapeHtml(text || '첫 기록이 올라오면 이곳에 표시됩니다.')}</small>
+        </div>
+      `;
+    }
+
+    function groupGoalProgressHtml(percent, distanceKm, goalKm) {
+      const capped = Math.min(100, Math.max(0, Number(percent || 0)));
+      const status = progressStatusClass(percent);
+      const remain = Math.max(0, Number(goalKm || 0) - Number(distanceKm || 0));
+      const label = percent >= 100 ? '모임 목표를 달성했어요.' : `모임 목표까지 ${remain.toFixed(2)}km 남았어요.`;
+      return `
+        <div class="group-progress-card ${status}">
+          <div class="group-progress-head">
+            <strong>이번 주 모임 목표</strong>
+            <span>${Number(percent || 0).toFixed(1)}%</span>
+          </div>
+          <div class="group-progress-track"><i style="width:${capped}%"></i></div>
+          <small>${escapeHtml(label)}</small>
+        </div>
+      `;
+    }
+
+    function progressStatusClass(percent) {
+      const value = Number(percent || 0);
+      if (value >= 100) return 'progress-done';
+      if (value >= 80) return 'progress-near';
+      if (value >= 40) return 'progress-mid';
+      return 'progress-low';
+    }
+
+    function simpleDailyRecord(row) {
+      return `
+        <div class="simple-row">
+          <div>
+            <strong>${runnerNameWithMedal(row)}</strong>
+            <small>${escapeHtml(row.durationText || '시간 -')} · ${escapeHtml(row.averagePaceText || '페이스 -')}</small>
+          </div>
+          <b>${Number(row.distanceKm || 0).toFixed(2)}km</b>
+        </div>
+      `;
+    }
+
+    function simpleWeeklyProgressCard(row) {
+      const percent = Number(row.percent || 0);
+      const goal = Number(row.goalKm || row.defaultGoalKm || (state.dashboard && state.dashboard.weeklyGoalKm) || 10);
+      const capped = Math.min(100, Math.max(0, percent));
+      const status = progressStatusClass(percent);
+      const remaining = Math.max(0, goal - Number(row.distanceKm || 0));
+      const progressText = percent >= 100
+        ? (percent >= 120 ? '목표를 훌쩍 넘겼어요.' : '목표를 달성했어요.')
+        : `목표까지 ${remaining.toFixed(2)}km`;
+      const achievedBadge = percent >= 100
+        ? `<span class="weekly-achieve-badge">${percent >= 120 ? '✨ 초과 달성' : '🥇 목표 달성'}</span>`
+        : '';
+      return `
+        <div class="simple-row progress-row ${status} ${percent >= 100 ? 'achieved' : ''}">
+          <div>
+            <strong>${runnerNameWithMedal(row)}</strong>
+            <small>${Number(row.count || 0)}회 · ${Number(row.distanceKm || 0).toFixed(2)}km / ${goal.toFixed(1).replace(/\.0$/, '')}km</small>
+            ${achievedBadge}
+            <span class="mini-progress"><i style="width:${capped}%"></i></span>
+            <small class="progress-helper">${escapeHtml(progressText)}</small>
+          </div>
+          <b class="${percent >= 100 ? 'over' : ''}">${percent.toFixed(1)}%</b>
+        </div>
+      `;
+    }
+
+    function makeLocalWeekSeasonLabel(ymd) {
+      const base = String(ymd || todayLocalDate());
+      const m = base.match(/^(20\d{2})-(\d{2})-(\d{2})$/);
+      if (!m) return '이번 주 러닝';
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      const month = d.getMonth() + 1;
+      const first = new Date(d.getFullYear(), d.getMonth(), 1);
+      const weekNo = Math.max(1, Math.ceil((d.getDate() + first.getDay()) / 7));
+      const season = month >= 3 && month <= 5 ? '봄 러닝' : (month >= 6 && month <= 8 ? '여름 러닝' : (month >= 9 && month <= 11 ? '가을 러닝' : '겨울 러닝'));
+      return `${month}월 ${weekNo}주차 ${season}`;
+    }
+
+    function makeLocalWeeklyClosingNotice(dashboard, weeklyRows) {
+      const day = new Date().getDay();
+      const hour = new Date().getHours();
+      const active = (weeklyRows || []).filter(row => Number(row.distanceKm || 0) > 0 || Number(row.count || 0) > 0).length;
+      const achieved = (weeklyRows || []).filter(row => Number(row.percent || 0) >= 100).length;
+      if (day === 0 && hour >= 12) return '오늘은 주간 기록 마감일이에요. 마지막 인증을 잊지 마세요.';
+      if (day === 1 && hour < 12) return '새 주가 시작됐어요. 가볍게 다시 출발해요.';
+      if (Number(dashboard && dashboard.totalParticipants || 0) > 0 && active === 0) return '이번 주 첫 인증을 기다리고 있어요.';
+      if (achieved > 0) return '목표 달성 멤버가 있어요. 축하 배지를 확인해보세요.';
+      return '';
+    }
+
+    function dashboardAccordion(id, title, meta, content) {
+      const remembered = state.openDashboardSections && Object.prototype.hasOwnProperty.call(state.openDashboardSections, id);
+      const defaultOpen = id === 'dailySummary' || id === 'weeklySummary';
+      const isOpen = remembered ? Boolean(state.openDashboardSections[id]) : defaultOpen;
+      const open = isOpen ? 'open' : '';
+      return `
+        <details class="dashboard-accordion" data-dashboard-section="${escapeAttr(id)}" ${open} ontoggle="rememberDashboardSection(this)">
+          <summary>
+            <span class="accordion-title">
+              <strong>${escapeHtml(title)}</strong>
+              <small>${meta || '눌러서 자세히 보기'}</small>
+            </span>
+            <span class="fold-icon">⌄</span>
+          </summary>
+          <div class="accordion-content">${content}</div>
+        </details>
+      `;
+    }
+
+    function rememberDashboardSection(el) {
+      if (!el || !el.dataset) return;
+      state.openDashboardSections[el.dataset.dashboardSection] = Boolean(el.open);
+    }
+
+    function setDashboardRecordView(view) {
+      state.dashboardRecordView = view === 'weekly' ? 'weekly' : 'today';
+      if (state.dashboard) renderDashboard(state.dashboard);
+    }
+
+    function renderWeeklyProofPhotos(dashboard) {
+      const gallery = $('weeklyProofGallery');
+      const meta = $('weeklyProofMeta');
+      if (!gallery) return;
+      const rows = dashboard && Array.isArray(dashboard.weeklyProofPhotos)
+        ? dashboard.weeklyProofPhotos
+        : [];
+      if (meta) meta.textContent = dashboard && dashboard.weekLabel ? `${dashboard.weekLabel} 공개 인증샷` : '';
+      gallery.innerHTML = rows.length
+        ? rows.map(proofPhotoCard).join('')
+        : '<div class="empty">이번 주 공개된 러닝 인증샷이 아직 없어요.<br />러닝 인증하기에서 선택 인증샷을 공개로 올리면 여기에 모입니다 🤍</div>';
+    }
+
+    function normalizeDashboard(data) {
+      if (!data) return null;
+      if (Array.isArray(data)) {
+        return {
+          weeklyGoalKm: 10,
+          today: '',
+          weekLabel: '',
+          weeklyProgress: data.map(row => ({
+            participantId: row.participantId,
+            name: row.name,
+            emoji: row.emoji,
+            count: row.count,
+            distanceKm: row.totalDistanceKm || 0,
+            durationText: row.totalDurationText || '',
+            averagePaceText: row.averagePaceText || '',
+            percent: Number(row.totalDistanceKm || 0) * 10,
+            excessPercent: Math.max(0, Number(row.totalDistanceKm || 0) * 10 - 100),
+            remainingKm: Math.max(0, 10 - Number(row.totalDistanceKm || 0))
+          })),
+          totalParticipants: data.length,
+          todayRecords: [],
+          todayRunnerTotals: [],
+          weeklyProofPhotos: [],
+          weeklyLeaderboard: [],
+          monthlyLeaderboard: [],
+          allTimeLeaderboard: [],
+          weeklyTotals: data.map(row => ({ name: row.name, count: row.count, distanceKm: row.totalDistanceKm, durationText: row.totalDurationText, averagePaceText: row.averagePaceText })),
+          monthlyTotals: data.map(row => ({ name: row.name, count: row.count, distanceKm: row.totalDistanceKm, durationText: row.totalDurationText, averagePaceText: row.averagePaceText }))
+        };
+      }
+      return data;
+    }
+
+    function renderPersonalStats() {
+      const box = $('personalStats');
+      if (!box) return;
+      const person = state.participants.find(p => p.id === state.selectedParticipantId);
+      const personIndex = state.participants.findIndex(p => p.id === state.selectedParticipantId);
+      const dashboard = state.dashboard;
+      if (!state.personalStatsOpen || !person || !dashboard || !dashboard.memberWeeklyStats) {
+        box.className = 'personal-stats';
+        box.innerHTML = '';
+        box.onclick = null;
+        return;
+      }
+
+      const stats = dashboard.memberWeeklyStats[state.selectedParticipantId];
+      if (!stats) {
+        box.className = 'personal-stats show';
+        box.onclick = (event) => { if (event.target === box) closePersonalStats(); };
+        const loadingText = state.loadingPersonalStatsFor === state.selectedParticipantId
+          ? '개인 기록을 불러오는 중이에요...'
+          : '닉네임을 선택하면 개인 기록을 불러와요.';
+        box.innerHTML = `
+          <div class="personal-card personal-sheet-card">
+            <div class="personal-head">
+              <div>
+                <h3 class="personal-title">${displayEmoji(person)} ${escapeHtml(person.displayName || person.name)}님의 이번 주 기록</h3>
+                <div class="personal-week">${escapeHtml(dashboard.weekLabel || '')}</div>
+              </div>
+              <button type="button" class="collapse-btn" onclick="closePersonalStats()">닫기</button>
+            </div>
+            <div class="empty">${escapeHtml(loadingText)} 🌿</div>
+          </div>
+        `;
+        return;
+      }
+
+      const allTimeStats = dashboard.memberAllTimeStats && dashboard.memberAllTimeStats[state.selectedParticipantId];
+      const maxDaily = Math.max(1, Number(stats.maxDailyKm || 0));
+      const days = stats.days || [];
+      const dayBars = days.map((day) => personalDayBar(day, maxDaily)).join('');
+      const records = stats.records || [];
+      const recordRows = records.length
+        ? records.slice(0, 5).map(personalRecordRow).join('') + (records.length > 5 ? `<div class="tiny">외 ${records.length - 5}개 기록이 더 있어요.</div>` : '')
+        : '<div class="empty">이번 주에는 아직 저장된 러닝 기록이 없어요.<br />첫 기록을 올리면 여기에 그래프가 생겨요 🌱</div>';
+      const percent = Number(stats.percent || 0);
+      const capped = Math.min(percent, 100);
+      const goalKm = Number(stats.goalKm || person.targetDistanceKm || dashboard.weeklyGoalKm || 10);
+      const lastWeekStats = dashboard.memberLastWeekStats && dashboard.memberLastWeekStats[state.selectedParticipantId];
+      const recommendedGoal = recommendGoalKm(stats, lastWeekStats, allTimeStats, dashboard);
+      const badges = renderBadges(getBadgesForStats(stats));
+      const goalCelebrationHtml = renderGoalAchievementBadge(person, stats, goalKm);
+      const lastWeekHtml = renderLastWeekStats(lastWeekStats);
+
+      box.className = 'personal-stats show';
+      box.onclick = (event) => { if (event.target === box) closePersonalStats(); };
+      box.innerHTML = `
+        <div class="personal-card personal-sheet-card" style="${runnerGradientStyle(person, personIndex)}">
+          <div class="personal-head">
+            <div>
+              <h3 class="personal-title">${runnerNameWithMedal(Object.assign({}, person, { name: person.displayName || person.name }))}님의 이번 주 기록</h3>
+              <div class="personal-week">${escapeHtml(stats.weekLabel || dashboard.weekLabel || '')}</div>
+            </div>
+            <button type="button" class="collapse-btn" onclick="closePersonalStats()">닫기</button>
+          </div>
+          <div class="goal-editor">
+            <label>내 이번 주 목표(km)
+              <input id="goalInput" type="number" inputmode="decimal" min="0.1" max="300" step="0.1" value="${escapeAttr(goalKm)}" />
+            </label>
+            <button type="button" class="goal-small-btn" onclick="saveGoal()">목표 저장</button>
+            <button type="button" class="goal-small-btn recommend" onclick="applyRecommendedGoal(${recommendedGoal})">추천 ${recommendedGoal}km</button>
+            <div class="progress-percent ${percent >= 100 ? 'over' : ''}">${percent.toFixed(1)}%</div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${capped}%"></div></div>
+          <div class="progress-sub">${Number(stats.distanceKm || 0).toFixed(2)}km / ${goalKm.toFixed(2).replace(/\.00$/, '')}km · ${percent >= 100 ? '축하합니다! 목표 달성 🥇' + (Number(stats.excessPercent || 0) > 0 ? ' · 초과 ' + Number(stats.excessPercent || 0).toFixed(1) + '%' : '') : '남은 ' + Number(stats.remainingKm || 0).toFixed(2) + 'km'}</div>
+          ${goalCelebrationHtml}
+          ${badges}
+          <div class="personal-body">
+            <div class="personal-metrics">
+              ${personalMetric('이번 주 거리', `${Number(stats.distanceKm || 0).toFixed(2)}km`)}
+              ${personalMetric('이번 주 시간', stats.durationText || '-')}
+              ${personalMetric('이번 주 페이스', stats.averagePaceText || '-')}
+              ${personalMetric('전체 거리', allTimeStats ? `${Number(allTimeStats.distanceKm || 0).toFixed(2)}km` : '-')}
+              ${personalMetric('전체 횟수', allTimeStats ? `${Number(allTimeStats.count || 0)}회` : '-')}
+              ${personalMetric('전체 페이스', allTimeStats && allTimeStats.averagePaceText ? allTimeStats.averagePaceText : '-')}
+            </div>
+            <div class="personal-chart">${dayBars}</div>
+            <div class="personal-records">${recordRows}</div>
+            ${lastWeekHtml}
+          </div>
+        </div>
+      `;
+      maybeShowGoalAchievementPopup(person, stats);
+    }
+
+    function recommendGoalKm(stats, lastWeekStats, allTimeStats, dashboard) {
+      const candidates = [
+        Number(stats && stats.distanceKm || 0),
+        Number(lastWeekStats && lastWeekStats.distanceKm || 0),
+        Number(allTimeStats && allTimeStats.count ? (Number(allTimeStats.distanceKm || 0) / Math.max(1, Number(allTimeStats.count || 1))) * 2 : 0),
+        Number(dashboard && dashboard.weeklyGoalKm || 10)
+      ].filter(n => Number.isFinite(n) && n > 0);
+      const base = candidates.length ? Math.max.apply(null, candidates) : 10;
+      const recommended = Math.min(300, Math.max(1, Math.ceil((base * 1.08) * 2) / 2));
+      return Number(recommended.toFixed(1));
+    }
+
+    function applyRecommendedGoal(goal) {
+      const input = $('goalInput');
+      if (!input) return;
+      input.value = Number(goal || 0).toFixed(1).replace(/\.0$/, '');
+      setStatus('info', '추천 목표를 입력했어요. 괜찮으면 목표 저장을 눌러주세요.');
+    }
+
+    function ensureSelectedPersonalStatsLoaded(force) {
+      const id = state.selectedParticipantId;
+      if (!id || !state.dashboard) return;
+      state.dashboard.memberWeeklyStats = state.dashboard.memberWeeklyStats || {};
+      state.dashboard.memberLastWeekStats = state.dashboard.memberLastWeekStats || {};
+      state.dashboard.memberAllTimeStats = state.dashboard.memberAllTimeStats || {};
+      if (!force && state.dashboard.memberWeeklyStats[id]) return;
+      if (state.loadingPersonalStatsFor === id) return;
+      state.loadingPersonalStatsFor = id;
+      renderPersonalStats();
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (state.loadingPersonalStatsFor === id) state.loadingPersonalStatsFor = '';
+          if (!res || !res.ok) {
+            renderPersonalStats();
+            return showError(res && res.error ? res.error : '개인 기록을 불러오지 못했어요.');
+          }
+          mergeParticipantDetailData(res);
+          renderPersonalStats();
+        })
+        .withFailureHandler((err) => {
+          if (state.loadingPersonalStatsFor === id) state.loadingPersonalStatsFor = '';
+          renderPersonalStats();
+          showError(errorMessage(err));
+        })
+        .getParticipantDetailData(id);
+    }
+
+    function mergeParticipantDetailData(res) {
+      if (!res || !state.dashboard) return;
+      const id = res.participantId || state.selectedParticipantId;
+      state.dashboard.memberWeeklyStats = state.dashboard.memberWeeklyStats || {};
+      state.dashboard.memberLastWeekStats = state.dashboard.memberLastWeekStats || {};
+      state.dashboard.memberAllTimeStats = state.dashboard.memberAllTimeStats || {};
+      if (res.memberWeeklyStats) state.dashboard.memberWeeklyStats[id] = res.memberWeeklyStats;
+      if (res.memberLastWeekStats) state.dashboard.memberLastWeekStats[id] = res.memberLastWeekStats;
+      if (res.memberAllTimeStats) state.dashboard.memberAllTimeStats[id] = res.memberAllTimeStats;
+    }
+
+    function renderLastWeekStats(stats) {
+      if (!stats) return '';
+      const runDays = (stats.days || []).filter(day => Number(day.count || 0) > 0);
+      const summary = Number(stats.count || 0) > 0
+        ? `총 ${Number(stats.distanceKm || 0).toFixed(2)}km · ${escapeHtml(stats.durationText || '시간 -')} · ${Number(stats.activeDays || 0)}일`
+        : '지난주에는 저장된 러닝 기록이 없어요.';
+      const rows = runDays.length
+        ? runDays.map(lastWeekDayRow).join('')
+        : '<div class="empty">지난주 기록이 없어요.<br />이번 주 기록부터 차곡차곡 쌓아봐요 🌱</div>';
+      return `
+        <div class="last-week-card">
+          <div class="last-week-head">
+            <span>🗓 지난주 기록</span>
+            <small>${escapeHtml(stats.weekLabel || '')}</small>
+          </div>
+          <div class="last-week-summary">${summary}</div>
+          <div class="last-week-days">${rows}</div>
+        </div>
+      `;
+    }
+
+    function renderRankings(dashboard) {
+      const rows = state.rankTab === 'all'
+        ? (dashboard.allTimeLeaderboard || dashboard.monthlyLeaderboard || [])
+        : (dashboard.weeklyLeaderboard || dashboard.weeklyProgress || []);
+      const limitedRows = (rows || []).slice(0, 5);
+      const list = limitedRows.length
+        ? `<div class="rank-list">${limitedRows.map(rankingCard).join('')}</div>`
+        : '<div class="empty">아직 랭킹에 표시할 기록이 없어요.</div>';
+      return `
+        <div class="rank-tabs">
+          <button type="button" class="rank-tab ${state.rankTab === 'week' ? 'active' : ''}" onclick="setRankTab('week')">이번 주 TOP 5</button>
+          <button type="button" class="rank-tab ${state.rankTab === 'all' ? 'active' : ''}" onclick="setRankTab('all')">전체 TOP 5</button>
+        </div>
+        ${list}
+      `;
+    }
+
+    function rankingCard(row) {
+      const medal = Number(row.rank || 0) === 1 ? '🥇' : (Number(row.rank || 0) === 2 ? '🥈' : (Number(row.rank || 0) === 3 ? '🥉' : `${Number(row.rank || 0)}위`));
+      return `
+        <div class="summary-card">
+          <div>
+            <div class="summary-name">${escapeHtml(medal)} ${runnerNameWithMedal(row)}</div>
+            <div class="summary-sub">${Number(row.count || 0)}회 · ${escapeHtml(row.durationText || '누적시간 -')} · ${escapeHtml(row.averagePaceText || '평균페이스 -')}</div>
+          </div>
+          <div class="summary-distance">${Number(row.distanceKm || 0).toFixed(2)}km<small>${state.rankTab === 'week' ? '이번 주' : '전체'}</small></div>
+        </div>
+      `;
+    }
+
+    function setRankTab(tab) {
+      state.rankTab = tab === 'all' ? 'all' : 'week';
+      if (state.dashboard) renderDashboard(state.dashboard);
+    }
+
+    function lastWeekDayRow(day) {
+      return `
+        <div class="last-week-row">
+          <div class="last-week-day">${escapeHtml(day.label || '-')}</div>
+          <div class="last-week-distance">${Number(day.distanceKm || 0).toFixed(2)}km</div>
+          <div class="last-week-time">${escapeHtml(day.durationText || '-')}</div>
+        </div>
+      `;
+    }
+
+    function personalMetric(label, value) {
+      return `<div class="personal-metric"><div class="pm-k">${escapeHtml(label)}</div><div class="pm-v">${escapeHtml(value)}</div></div>`;
+    }
+
+    function personalDayBar(day, maxDaily) {
+      const distance = Number(day && day.distanceKm || 0);
+      const height = distance > 0 ? Math.max(8, Math.round((distance / maxDaily) * 100)) : 0;
+      const hasRun = distance > 0 ? 'has-run' : '';
+      const kmText = distance > 0 ? distance.toFixed(distance >= 10 ? 1 : 2) + 'k' : '0';
+      return `
+        <div class="day-bar-item">
+          <div class="day-bar-outer"><div class="day-bar-fill ${hasRun}" style="height:${height}%"></div></div>
+          <div class="day-km">${escapeHtml(kmText)}</div>
+          <div class="day-label">${escapeHtml(day.label || '')}</div>
+        </div>
+      `;
+    }
+
+    function personalRecordRow(row) {
+      const details = [
+        row.durationText || '',
+        row.averagePaceText || '',
+        row.averageHeartRateBpm ? `${row.averageHeartRateBpm}bpm` : '',
+        row.caloriesKcal ? `${row.caloriesKcal}kcal` : '',
+        row.cadenceSpm ? `${row.cadenceSpm}spm` : '',
+        row.appName || ''
+      ].filter(Boolean).join(' · ');
+      const note = cleanDisplayNote(row.note || '');
+      return `
+        <div class="personal-record-row">
+          <div>
+            <div class="personal-record-date">${escapeHtml(row.activityDate || '-')}</div>
+            <div class="personal-record-sub">${escapeHtml(details || '상세 기록 -')}</div>
+            ${sourceBadge(row.inputMode)}
+          </div>
+          <div class="personal-record-km">${Number(row.distanceKm || 0).toFixed(2)}km</div>
+        </div>
+      `;
+    }
+
+
+    function summaryCard(row) {
+      return `
+        <div class="summary-card">
+          <div>
+            <div class="summary-name">${runnerNameWithMedal(row)}</div>
+            <div class="summary-sub">${Number(row.count || 0)}회 · ${escapeHtml(row.durationText || '누적시간 -')} · ${escapeHtml(row.averagePaceText || '평균페이스 -')}</div>
+          </div>
+          <div class="summary-distance">${Number(row.distanceKm || 0).toFixed(2)}km<small>누적 거리</small></div>
+        </div>
+      `;
+    }
+
+    function recordCard(row) {
+      const countText = Number(row.count || 1) > 1 ? `오늘 ${Number(row.count || 1)}회` : '오늘 기록';
+      const dateText = row.activityDate || (state.dashboard && state.dashboard.today) || '';
+      return `
+        <div class="record-card">
+          <div>
+            <div class="record-name">${runnerNameWithMedal(row)}</div>
+            <div class="record-sub">${escapeHtml(dateText)} · ${escapeHtml(row.durationText || '시간 -')} · ${escapeHtml(row.averagePaceText || '페이스 -')}${row.appName ? ' · ' + escapeHtml(row.appName) : ''}</div>
+            ${sourceBadge(row.inputMode)}
+            ${reactionBar(row)}
+          </div>
+          <div class="record-distance">${Number(row.distanceKm || 0).toFixed(2)}km<small>${escapeHtml(countText)}</small></div>
+        </div>
+      `;
+    }
+
+    function proofPhotoCard(row) {
+      const id = row.proofPhotoFileId || '';
+      const cached = id && state.proofPhotoDataCache[id] ? state.proofPhotoDataCache[id] : '';
+      const src = cached || '';
+      const img = src
+        ? `<img loading="lazy" decoding="async" alt="${escapeAttr(row.name || '러닝 인증샷')} 인증샷" src="${escapeAttr(src)}" />`
+        : `<div class="proof-card loading" data-proof-id="${escapeAttr(id)}">사진 불러오는 중...</div>`;
+      if (!src) {
+        return `
+          <div class="proof-card loading" data-proof-id="${escapeAttr(id)}">
+            <span>사진 불러오는 중...</span>
+            <div class="proof-caption"><span>${runnerNameWithMedal(row)}</span><span>${Number(row.distanceKm || 0).toFixed(2)}km</span></div>
+            ${reactionBar(row)}
+          </div>
+        `;
+      }
+      return `
+        <div class="proof-card" data-proof-id="${escapeAttr(id)}">
+          ${img}
+          <div class="proof-caption"><span>${runnerNameWithMedal(row)}</span><span>${Number(row.distanceKm || 0).toFixed(2)}km</span></div>
+          ${reactionBar(row)}
+        </div>
+      `;
+    }
+
+    function loadDashboardProofImages() {
+      const nodes = Array.from(document.querySelectorAll('[data-proof-id]'));
+      const ids = [...new Set(nodes.map(node => node.getAttribute('data-proof-id')).filter(Boolean))]
+        .filter(id => !state.proofPhotoDataCache[id]);
+      if (!ids.length) return;
+      fetchProofPhotoDataMap(ids).then((photos) => {
+        Object.assign(state.proofPhotoDataCache, photos || {});
+        nodes.forEach((node) => {
+          const id = node.getAttribute('data-proof-id');
+          const src = state.proofPhotoDataCache[id];
+          if (!src || node.querySelector('img')) return;
+          const record = findRecordByProofPhotoId(id) || {};
+          node.classList.remove('loading');
+          node.innerHTML = `<img loading="lazy" decoding="async" alt="${escapeAttr(record.name || '러닝 인증샷')} 인증샷" src="${escapeAttr(src)}" />` +
+            `<div class="proof-caption"><span>${runnerNameWithMedal(record)}</span><span>${Number(record.distanceKm || 0).toFixed(2)}km</span></div>` +
+            reactionBar(record);
+        });
+      }).catch(() => {});
+    }
+
+    function fetchProofPhotoDataMap(ids) {
+      return new Promise((resolve) => {
+        const missing = (ids || []).filter(Boolean).filter(id => !state.proofPhotoDataCache[id]);
+        if (!missing.length) return resolve({});
+        google.script.run
+          .withSuccessHandler((res) => {
+            if (!res || !res.ok) return resolve({});
+            resolve(res.photos || {});
+          })
+          .withFailureHandler(() => resolve({}))
+          .getProofPhotoDataMap(missing);
+      });
+    }
+
+    function findRecordByProofPhotoId(fileId) {
+      const dashboard = state.dashboard || {};
+      const all = []
+        .concat(dashboard.todayRecords || [])
+        .concat(dashboard.todayRunnerTotals || [])
+        .concat(dashboard.todayProofPhotos || [])
+        .concat(dashboard.weeklyProofPhotos || []);
+      return all.find(row => row && row.proofPhotoFileId === fileId) || null;
+    }
+
+    function getBadgesForProgress(row) {
+      const badges = [];
+      const percent = Number(row.percent || 0);
+      const distance = Number(row.distanceKm || 0);
+      const count = Number(row.count || 0);
+      if (row.isFirstRunEver) badges.push({ icon: '🌱', label: '첫 러닝' });
+      if (percent >= 100) badges.push({ icon: '🥇', label: '축하합니다' });
+      if (percent >= 100) badges.push({ icon: '🌈', label: '목표 달성' });
+      if (percent >= 120) badges.push({ icon: '✨', label: '초과 달성' });
+      if (distance >= 10) badges.push({ icon: '🦄', label: '10km 클럽' });
+      if (count >= 3) badges.push({ icon: '🐢', label: '꾸준러' });
+      return badges.slice(0, 5);
+    }
+
+    function getBadgesForStats(stats) {
+      const badges = getBadgesForProgress(stats);
+      if (Number(stats.activeDays || 0) >= 3) badges.push({ icon: '📅', label: '3일 러닝' });
+      if (Number(stats.maxDailyKm || 0) >= 5) badges.push({ icon: '👟', label: '롱런' });
+      if (Number(stats.caloriesKcal || 0) >= 500) badges.push({ icon: '🔥', label: '에너지' });
+      return badges.slice(0, 6);
+    }
+
+    function renderBadges(badges) {
+      if (!badges || !badges.length) return '';
+      return `<div class="badge-list">${badges.map(b => `<span class="badge-chip">${escapeHtml(b.icon)} ${escapeHtml(b.label)}</span>`).join('')}</div>`;
+    }
+
+    function renderGoalAchievementBadge(person, stats, goalKm) {
+      const percent = Number(stats && stats.percent || 0);
+      if (percent < 100) return '';
+      const distance = Number(stats && stats.distanceKm || 0).toFixed(2);
+      const excess = Number(stats && stats.excessPercent || 0);
+      const extra = excess > 0 ? `목표보다 ${excess.toFixed(1)}% 더 달렸어요.` : '이번 주 목표를 딱 해냈어요.';
+      return `
+        <div class="goal-achievement-badge">
+          <div class="goal-achievement-icon">🥇</div>
+          <div>
+            <strong>${displayEmoji(person)} 이번 주 목표 달성!</strong>
+            <span>${distance}km / ${Number(goalKm || 0).toFixed(2).replace(/\.00$/, '')}km · ${escapeHtml(extra)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function maybeShowGoalAchievementPopup(person, stats) {
+      const id = state.selectedParticipantId;
+      if (!id || state.pendingGoalCelebrationFor !== id) return;
+      state.pendingGoalCelebrationFor = '';
+      if (Number(stats && stats.percent || 0) < 100) return;
+      window.setTimeout(() => {
+        triggerCelebration(`${displayEmoji(person)} 이번 주 목표 달성!`);
+      }, 120);
+    }
+
+    function reactionBar(row) {
+      if (!row || !row.recordId) return '';
+      const counts = row.reactionCounts || {};
+      const options = [
+        ['멋져요', '👏'],
+        ['꾸준해요', '🌿'],
+        ['목표달성', '🥇'],
+        ['파이팅', '💪']
+      ];
+      return `
+        <div class="reaction-bar">
+          ${options.map(([key, icon]) => {
+            const count = Number(counts[key] || 0);
+            return `<button type="button" class="reaction-btn" onclick="sendReaction('${escapeAttr(row.recordId)}','${escapeAttr(key)}')">${icon} ${escapeHtml(key)}${count ? ' ' + count : ''}</button>`;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function sendReaction(recordId, reaction) {
+      if (!state.selectedParticipantId) return showError('응원하려면 먼저 내 닉네임을 클릭해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '응원을 저장하지 못했어요.');
+          updateReactionCounts(res.recordId || recordId, res.reactionCounts || {});
+          setStatus('success', res.message || '응원을 남겼어요.');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .addReaction(recordId, state.selectedParticipantId, reaction);
+    }
+
+    function updateReactionCounts(recordId, counts) {
+      const dashboard = state.dashboard || {};
+      ['todayRecords', 'todayProofPhotos', 'todayRunnerTotals', 'weeklyProofPhotos', 'weeklyProgress', 'weeklyLeaderboard', 'monthlyLeaderboard', 'allTimeLeaderboard'].forEach((key) => {
+        (dashboard[key] || []).forEach((row) => {
+          if (row && row.recordId === recordId) row.reactionCounts = counts;
+        });
+      });
+      if (state.dashboard) renderDashboard(state.dashboard);
+    }
+
+    function openPersonalStats() {
+      if (!state.selectedParticipantId) return showError('먼저 닉네임을 선택해주세요.');
+      state.personalStatsOpen = true;
+      state.pendingGoalCelebrationFor = state.selectedParticipantId;
+      renderPersonalStats();
+      ensureSelectedPersonalStatsLoaded(false);
+    }
+
+    function closePersonalStats() {
+      state.personalStatsOpen = false;
+      renderPersonalStats();
+    }
+
+    function togglePersonalStats() {
+      if (state.personalStatsOpen) closePersonalStats();
+      else openPersonalStats();
+    }
+
+    function saveGoal() {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      const goal = Number(($('goalInput') && $('goalInput').value) || 0);
+      if (!goal || goal <= 0) return showError('목표 거리(km)를 입력해주세요.');
+      setStatus('info', '목표를 저장하는 중이에요 🎯');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '목표를 저장하지 못했어요.');
+          state.participants = res.participants || state.participants;
+          if (res.participant && res.participant.id) state.selectedParticipantId = res.participant.id;
+          renderParticipants();
+          if (res.dashboard) renderDashboard(res.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+          setStatus('success', res.message || '목표를 저장했어요.');
+          triggerCelebration('목표 저장 완료');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .updateParticipantGoal(state.selectedParticipantId, goal);
+    }
+
+    function cleanDisplayNote(note) {
+      return String(note || '')
+        .replace(/^\[(AI|AI확인|수동입력)\]\s*/g, '')
+        .replace(/관리자 삭제.*$/g, '')
+        .trim();
+    }
+
+    function progressForParticipant(participantId) {
+      const dashboard = state.dashboard || {};
+      return (dashboard.weeklyProgress || []).find(row => row.participantId === participantId) || null;
+    }
+
+    function isGoalAchieved(item) {
+      if (!item) return false;
+      if (item.goalAchieved || Number(item.percent || 0) >= 100) return true;
+      const progress = progressForParticipant(item.participantId || item.id);
+      return Boolean(progress && (progress.goalAchieved || Number(progress.percent || 0) >= 100));
+    }
+
+    function runnerNameWithMedal(item) {
+      const name = item ? (item.name || item.displayName || '-') : '-';
+      const medal = isGoalAchieved(item) ? '<span class="medal-badge">🥇 축하합니다</span>' : '';
+      return `${displayEmoji(item)} ${escapeHtml(name)}${medal}`;
+    }
+
+    function displayEmoji(item) {
+      if (item && item.emoji) return escapeHtml(item.emoji);
+      const seed = item ? String(item.participantId || item.id || item.name || 'runner') : 'runner';
+      return escapeHtml(FALLBACK_EMOJIS[positiveHash(seed) % FALLBACK_EMOJIS.length]);
+    }
+
+    function runnerGradientStyle(item, index) {
+      const palettes = [
+        ['#ff6fa8', '#ffb36d', '#ffe66d'],
+        ['#5bd6c7', '#66b7ff', '#9b8cff'],
+        ['#ff8ad8', '#b389ff', '#6edbff'],
+        ['#7ee081', '#80e6d7', '#7bb8ff'],
+        ['#ff9f7a', '#ffd36e', '#b8ef7a'],
+        ['#9bd8ff', '#87a7ff', '#e2a4ff'],
+        ['#ff77a9', '#ff9ec7', '#ffc58a'],
+        ['#64dfdf', '#72efdd', '#80ffdb'],
+        ['#ffcf56', '#ff8fab', '#c77dff'],
+        ['#a0c4ff', '#bdb2ff', '#ffc6ff'],
+        ['#95d5b2', '#74c69d', '#52b6ff'],
+        ['#f4978e', '#fbc4ab', '#ffdab9'],
+        ['#90dbf4', '#a3c4f3', '#cfbaf0'],
+        ['#f1c0e8', '#ffcfd2', '#fde4cf'],
+        ['#8ecae6', '#219ebc', '#bde0fe'],
+        ['#ffd166', '#ef476f', '#b5179e'],
+        ['#b8f2e6', '#aed9e0', '#ffa69e'],
+        ['#caffbf', '#9bf6ff', '#a0c4ff'],
+        ['#fdffb6', '#ffd6a5', '#ffadad'],
+        ['#d0f4de', '#a9def9', '#e4c1f9'],
+        ['#ffafcc', '#bde0fe', '#a2d2ff'],
+        ['#a8dadc', '#b8f2e6', '#f1faee'],
+        ['#ffb5a7', '#fcd5ce', '#f8edeb'],
+        ['#b9fbc0', '#98f5e1', '#8eecf5']
+      ];
+      const orderIndex = Number.isFinite(Number(index)) && Number(index) >= 0 ? Number(index) : null;
+      const seed = item ? String(item.participantId || item.id || item.name || 'runner') : 'runner';
+      const picked = palettes[orderIndex !== null ? orderIndex % palettes.length : positiveHash(seed) % palettes.length];
+      return `--runner-start:${picked[0]};--runner-mid:${picked[1]};--runner-end:${picked[2]};`;
+    }
+
+    function positiveHash(text) {
+      const source = String(text || 'runner');
+      let hash = 0;
+      for (let i = 0; i < source.length; i++) {
+        hash = ((hash << 5) - hash) + source.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function updateSubmitState() {
+      const disabled = state.isUploading || !state.selectedParticipantId || !state.selectedImage;
+      $('submitBtn').disabled = disabled;
+      const manualBtn = $('manualBtn');
+      if (manualBtn) manualBtn.disabled = disabled;
+      $('submitBtn').innerHTML = state.isUploading ? '<span class="spinner"></span>저장 중...' : 'AI 자동 인식으로 저장하기';
+    }
+
+    function resizeImageToDataUrl(file, maxSize, quality) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('파일을 읽지 못했어요.'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('이미지를 불러오지 못했어요. 다른 형식의 캡처로 다시 시도해주세요.'));
+          img.onload = () => {
+            const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+            const width = Math.max(1, Math.round(img.width * scale));
+            const height = Math.max(1, Math.round(img.height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve({ dataUrl: canvas.toDataURL('image/jpeg', quality), width, height });
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+
+    function sourceBadge(mode) {
+      const text = String(mode || '').trim();
+      if (!text) return '';
+      if (text.indexOf('관리자') >= 0) return '';
+      let cls = 'ai';
+      let icon = '🤖';
+      if (text.indexOf('수동') >= 0) { cls = 'manual'; icon = '✍️'; }
+      if (text.indexOf('수정') >= 0) { cls = 'edit'; icon = '📝'; }
+      if (text.indexOf('확인') >= 0) { cls = 'edit'; icon = '🔎'; }
+      return `<div class="source-badge ${cls}">${icon} ${escapeHtml(text)}</div>`;
+    }
+
+    function loadMyRecords() {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      $('myRecordsList').innerHTML = '내 최근 기록을 불러오는 중이에요...';
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) {
+            $('myRecordsList').innerHTML = escapeHtml(res && res.error ? res.error : '내 기록을 불러오지 못했어요.');
+            return;
+          }
+          renderMyRecords(res.records || []);
+        })
+        .withFailureHandler((err) => { $('myRecordsList').innerHTML = escapeHtml(errorMessage(err)); })
+        .getParticipantRecords(state.selectedParticipantId);
+    }
+
+    function renderMyRecords(records) {
+      if (!records.length) {
+        $('myRecordsList').innerHTML = '<div class="empty">아직 수정/삭제할 기록이 없어요.</div>';
+        return;
+      }
+      state.myRecords = records;
+      $('myRecordsList').innerHTML = records.map((r) => `
+        <div class="admin-record" id="myRecord-${escapeAttr(r.recordId)}">
+          <div>
+            <strong>${escapeHtml(r.activityDate || '-')} · ${Number(r.distanceKm || 0).toFixed(2)}km</strong>
+            <span>${escapeHtml(r.durationText || '')} · ${escapeHtml(r.averagePaceText || '')}${r.caloriesKcal ? ' · ' + Number(r.caloriesKcal) + 'kcal' : ''}</span>
+            ${r.hasProofPhoto ? '<span>🤳 러닝 인증샷 있음</span>' : '<span>🤍 선택 인증샷 없음</span>'}
+            ${r.requestStatus ? `<span class="request-status">요청 ${escapeHtml(r.requestStatus)}${r.requestCreatedAt ? ' · ' + escapeHtml(r.requestCreatedAt) : ''}</span>` : ''}
+            ${sourceBadge(r.inputMode)}
+          </div>
+          <div class="my-record-actions">
+            <button class="tiny-action-btn" onclick="openEditMyRecordById('${escapeAttr(r.recordId)}')">수정</button>
+            <button class="tiny-action-btn" onclick="openCorrectionRequestById('${escapeAttr(r.recordId)}')">수정 요청</button>
+            ${r.hasProofPhoto ? `<button class="tiny-action-btn" onclick="deleteMyProofPhoto('${escapeAttr(r.recordId)}')">내 인증샷만 삭제하기</button>` : ''}
+            <button class="tiny-action-btn danger" onclick="deleteMyRecord('${escapeAttr(r.recordId)}')">삭제</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function openEditMyRecordById(recordId) {
+      const record = (state.myRecords || []).find(r => r.recordId === recordId);
+      if (!record) return showError('수정할 기록을 찾지 못했어요.');
+      openEditMyRecord(record);
+    }
+
+    function openEditMyRecord(record) {
+      const target = $('myRecord-' + record.recordId);
+      if (!target) return;
+      const seconds = Number(record.durationSeconds || 0);
+      const minutes = seconds ? Math.floor(seconds / 60) : (record.durationMinutes || '');
+      const secPart = seconds ? seconds % 60 : (record.durationSecondsPart || '');
+      const form = document.createElement('div');
+      form.className = 'record-edit-form';
+      form.innerHTML = `
+        <div class="manual-grid">
+          <label class="wide">달린 날짜
+            <input id="editDate-${escapeAttr(record.recordId)}" type="date" value="${escapeAttr(record.activityDate || todayLocalDate())}" />
+          </label>
+          <label>거리(km)
+            <input id="editDistance-${escapeAttr(record.recordId)}" type="number" inputmode="decimal" min="0.01" step="0.01" value="${escapeAttr(record.distanceKm || '')}" />
+          </label>
+          <label>시간(분)
+            <input id="editMinutes-${escapeAttr(record.recordId)}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(minutes)}" />
+          </label>
+          <label>시간(초)
+            <input id="editSeconds-${escapeAttr(record.recordId)}" type="number" inputmode="numeric" min="0" max="59" step="1" value="${escapeAttr(secPart)}" />
+          </label>
+          <label>칼로리(선택)
+            <input id="editCalories-${escapeAttr(record.recordId)}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(record.caloriesKcal || '')}" />
+          </label>
+        </div>
+        <div class="review-actions">
+          <button class="soft-btn" onclick="saveEditedMyRecord('${escapeAttr(record.recordId)}')">수정 저장</button>
+          <button class="soft-btn secondary" onclick="loadMyRecords()">취소</button>
+        </div>
+      `;
+      const old = target.querySelector('.record-edit-form');
+      if (old) old.remove();
+      target.appendChild(form);
+    }
+
+    function openCorrectionRequestById(recordId) {
+      const record = (state.myRecords || []).find(r => r.recordId === recordId);
+      if (!record) return showError('요청할 기록을 찾지 못했어요.');
+      const target = $('myRecord-' + record.recordId);
+      if (!target) return;
+      const form = document.createElement('div');
+      form.className = 'record-edit-form correction-request-form';
+      form.innerHTML = `
+        <label class="wide">관리자에게 남길 수정 요청
+          <textarea id="requestMessage-${escapeAttr(record.recordId)}" maxlength="300" placeholder="예: 날짜가 6월 15일이 아니라 6월 16일이에요. 거리도 5.2km로 바꿔주세요.">${escapeHtml(record.requestMessage || '')}</textarea>
+        </label>
+        <div class="review-actions">
+          <button class="soft-btn" onclick="sendCorrectionRequest('${escapeAttr(record.recordId)}')">요청 보내기</button>
+          <button class="soft-btn secondary" onclick="loadMyRecords()">취소</button>
+        </div>
+      `;
+      const old = target.querySelector('.record-edit-form');
+      if (old) old.remove();
+      target.appendChild(form);
+    }
+
+    function sendCorrectionRequest(recordId) {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      const message = (($('requestMessage-' + recordId) && $('requestMessage-' + recordId).value) || '').trim();
+      if (!message) return showError('수정 요청 내용을 입력해주세요.');
+      setStatus('info', '수정 요청을 남기는 중이에요 📝');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '수정 요청에 실패했어요.');
+          setStatus('success', res.message || '수정 요청을 남겼어요.');
+          renderMyRecords(res.records || []);
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .requestRecordCorrection(state.selectedParticipantId, recordId, message);
+    }
+
+    function saveEditedMyRecord(recordId) {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      const review = {
+        runningDate: $('editDate-' + recordId).value,
+        distanceKm: $('editDistance-' + recordId).value,
+        durationMinutes: Number($('editMinutes-' + recordId).value || 0),
+        durationSecondsPart: Number($('editSeconds-' + recordId).value || 0),
+        caloriesKcal: $('editCalories-' + recordId).value
+      };
+      if (!review.runningDate) return showError('달린 날짜를 입력해주세요.');
+      if (!Number(review.distanceKm)) return showError('달린 거리(km)를 입력해주세요.');
+      if (review.durationMinutes <= 0 && review.durationSecondsPart <= 0) return showError('달린 시간(분/초)을 입력해주세요.');
+      if (review.durationSecondsPart < 0 || review.durationSecondsPart > 59) return showError('초는 0~59 사이로 입력해주세요.');
+
+      setStatus('info', '내 기록을 수정하는 중이에요 📝');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '기록 수정에 실패했어요.');
+          setStatus('success', res.message || '기록을 수정했어요.');
+          if (res.dashboard) renderDashboard(res.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+          renderMyRecords(res.records || []);
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .updateParticipantRecord(state.selectedParticipantId, recordId, review);
+    }
+
+    function deleteMyProofPhoto(recordId) {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      if (!confirm('이 기록의 러닝 인증샷만 삭제할까요? 러닝 기록과 러닝 캡처는 그대로 남아요.')) return;
+      setStatus('info', '내 인증샷만 삭제하는 중이에요 🤳');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '인증샷 삭제에 실패했어요.');
+          setStatus('success', res.message || '인증샷만 삭제했어요.');
+          if (res.dashboard) renderDashboard(res.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+          renderMyRecords(res.records || []);
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .deleteParticipantProofPhoto(state.selectedParticipantId, recordId);
+    }
+
+    function deleteMyRecord(recordId) {
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      if (!confirm('이 기록을 삭제할까요? 삭제 후 대시보드에서 제외됩니다.')) return;
+      setStatus('info', '내 기록을 삭제하는 중이에요 🧹');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '기록 삭제에 실패했어요.');
+          setStatus('success', res.message || '기록을 삭제했어요.');
+          if (res.dashboard) renderDashboard(res.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+          renderMyRecords(res.records || []);
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .deleteParticipantRecord(state.selectedParticipantId, recordId);
+    }
+
+    function adminCode() {
+      return (($('adminCode') && $('adminCode').value) || '').trim();
+    }
+</script>
