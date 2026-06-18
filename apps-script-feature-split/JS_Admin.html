@@ -1,0 +1,422 @@
+<script>
+function loadAdminData() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      $('adminConsole').innerHTML = '관리자 데이터를 불러오는 중이에요...';
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) {
+            $('adminConsole').innerHTML = escapeHtml(res && res.error ? res.error : '관리자 데이터를 불러오지 못했어요.');
+            return;
+          }
+          state.adminData = res;
+          renderAdminConsole(res);
+          if (res.dashboard) renderDashboard(res.dashboard);
+        })
+        .withFailureHandler((err) => { $('adminConsole').innerHTML = escapeHtml(errorMessage(err)); })
+        .adminGetData(adminCode());
+    }
+
+    function renderAdminConsole(data) {
+      const participants = data.participants || [];
+      const records = data.records || [];
+      const deleted = data.deletedRecords || [];
+      const announcement = data.announcement || null;
+      const lightningRows = Array.isArray(data.lightningAttendance) ? data.lightningAttendance : [];
+      const requestRows = Array.isArray(data.recordRequests) ? data.recordRequests : [];
+      const auditRows = Array.isArray(data.auditLogs) ? data.auditLogs : [];
+      const participantRows = participants.length ? participants.map(adminParticipantRow).join('') : '<div class="empty">참가자가 없습니다.</div>';
+      const recordRows = records.length ? records.map((r) => adminRecordRow(r, participants)).join('') : '<div class="empty">관리할 기록이 아직 없어요.</div>';
+      const requestList = requestRows.length ? requestRows.map(adminRecordRequestRow).join('') : '<div class="empty">멤버가 남긴 수정 요청이 없어요.</div>';
+      const auditList = auditRows.length ? auditRows.map(adminAuditRow).join('') : '<div class="empty">아직 관리자 변경 이력이 없어요.</div>';
+      const deletedRows = deleted.length ? deleted.map((r) => `
+        <div class="admin-row">
+          <div class="admin-card-head">
+            <strong>${escapeHtml(r.name || '-')} · ${Number(r.distanceKm || 0).toFixed(2)}km</strong>
+            <span>${escapeHtml(r.activityDate || '')} · ${escapeHtml(r.durationText || '')}</span>
+          </div>
+          <button class="tiny-action-btn" onclick="adminRestoreRecord('${escapeAttr(r.recordId)}')">복구</button>
+        </div>
+      `).join('') : '<div class="empty">복구할 삭제 기록이 없어요.</div>';
+
+      $('adminConsole').innerHTML = `
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>번개 모임 관리</strong><span>${announcement ? '등록됨' : '비어 있음'}</span></div>
+          ${adminLightningPanel(announcement, participants, lightningRows)}
+        </div>
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>멤버 관리</strong><span>${participants.length}명</span></div>
+          ${participantRows}
+        </div>
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>수정 요청함</strong><span>${requestRows.length}개</span></div>
+          ${requestList}
+        </div>
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>세부 기록 관리</strong><span>최근 ${records.length}개</span></div>
+          ${recordRows}
+        </div>
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>삭제 기록 빠른 복구</strong><span>${deleted.length}개</span></div>
+          ${deletedRows}
+        </div>
+        <div class="admin-list">
+          <div class="admin-section-title"><strong>관리자 변경 이력</strong><span>최근 ${auditRows.length}개</span></div>
+          ${auditList}
+        </div>
+      `;
+    }
+
+    function adminLightningPanel(announcement, participants, lightningRows) {
+      const today = todayLocalDate();
+      const eventDate = announcement && announcement.eventDate ? announcement.eventDate : today;
+      const eventTime = announcement && announcement.eventTime ? announcement.eventTime : '';
+      const location = cleanLightningLocationText(announcement && announcement.location);
+      const memo = announcement && announcement.memo ? announcement.memo : '';
+      const attendance = announcement && announcement.attendance ? announcement.attendance : {};
+      const statusText = announcement
+        ? `${lightningDateTimeText(announcement) || '날짜 미정'} · ${location || '장소 미입력'} · 참석 ${Number(attendance.yes || 0)}명 / 미정 ${Number(attendance.maybe || 0)}명 / 불참 ${Number(attendance.no || 0)}명`
+        : '등록된 번개 모임이 없습니다. 날짜, 시간, 장소를 입력한 뒤 저장하세요.';
+      return `
+        <div class="admin-lightning-box">
+          <div class="admin-edit-grid">
+            <label>날짜<input id="adminAnnouncementDate" type="date" min="${escapeAttr(today)}" value="${escapeAttr(eventDate)}" /></label>
+            <label>시간
+              <select id="adminAnnouncementTime">
+                ${lightningTimeOptions(eventTime)}
+              </select>
+            </label>
+            <label class="wide">장소<input id="adminAnnouncementLocation" type="text" maxlength="80" value="${escapeAttr(location)}" placeholder="예: 올림픽공원 만남의 광장" /></label>
+            <label class="wide">간단 메모<input id="adminAnnouncementMemo" type="text" maxlength="160" value="${escapeAttr(memo)}" placeholder="예: 5km 가볍게 뛰고 커피 한 잔" /></label>
+          </div>
+          <div class="admin-record-note">${escapeHtml(statusText)}</div>
+          <div class="admin-actions-inline">
+            <button class="tiny-action-btn" onclick="adminUpdateAnnouncement()">번개 저장</button>
+            <button class="tiny-action-btn danger" onclick="adminClearAnnouncement()">번개 비우기</button>
+          </div>
+          ${announcement ? `
+            <div class="admin-section-title" style="margin-top:12px;"><strong>참석자 체크 수정</strong><span>${(participants || []).filter(p => p.active).length}명</span></div>
+            <div class="admin-attendance-grid">${adminLightningAttendanceRows(participants, lightningRows)}</div>
+          ` : '<div class="empty">번개 모임을 저장하면 참석자 체크를 수정할 수 있어요.</div>'}
+        </div>
+      `;
+    }
+
+    function adminRecordRequestRow(row) {
+      const id = escapeAttr(row.requestId || '');
+      const status = row.status || '접수';
+      return `
+        <div class="admin-row admin-request-row">
+          <div class="admin-card-head">
+            <strong>${escapeHtml(row.name || '-')} · ${escapeHtml(row.recordId || '-')}</strong>
+            <span>${escapeHtml(row.createdAt || '')} · ${escapeHtml(status)}</span>
+            <div class="admin-record-note">${escapeHtml(row.message || '-')}</div>
+            ${row.memo ? `<div class="admin-record-note">처리 메모: ${escapeHtml(row.memo)}</div>` : ''}
+          </div>
+          <div class="admin-actions-inline request-actions">
+            <select id="requestStatus-${id}">
+              ${['접수', '확인중', '완료', '보류'].map(item => `<option value="${item}" ${item === status ? 'selected' : ''}>${item}</option>`).join('')}
+            </select>
+            <input id="requestMemo-${id}" type="text" maxlength="200" placeholder="처리 메모" value="${escapeAttr(row.memo || '')}" />
+            <button class="tiny-action-btn" onclick="adminSetRequestStatus('${id}')">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function adminAuditRow(row) {
+      return `
+        <div class="admin-row admin-audit-row">
+          <div class="admin-card-head">
+            <strong>${escapeHtml(row.action || '-')} · ${escapeHtml(row.targetType || '-')}</strong>
+            <span>${escapeHtml(row.at || '')} · ${escapeHtml(row.targetId || '')}</span>
+            <div class="admin-record-note">${escapeHtml(row.summary || '-')}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function adminLightningAttendanceRows(participants, lightningRows) {
+      const statusMap = {};
+      (lightningRows || []).forEach((row) => {
+        if (row && row.participantId) statusMap[String(row.participantId)] = row;
+      });
+      const activeParticipants = (participants || []).filter(p => p.active);
+      if (!activeParticipants.length) return '<div class="empty">참석 체크를 수정할 멤버가 없습니다.</div>';
+      return activeParticipants.map((p) => {
+        const id = escapeAttr(p.id);
+        const current = statusMap[String(p.id)] || {};
+        const status = current.status || '';
+        const statusLabel = status ? `${status}${current.respondedAt ? ' · ' + current.respondedAt : ''}` : '아직 체크 없음';
+        return `
+          <div class="admin-attendance-row">
+            <div class="admin-card-head">
+              <strong>${displayEmoji(p)} ${escapeHtml(p.name || p.id)}</strong>
+              <span>${escapeHtml(statusLabel)}</span>
+            </div>
+            <select id="adminLightningStatus-${id}" aria-label="${escapeAttr(p.name || p.id)} 참석 상태">
+              <option value="" ${!status ? 'selected' : ''}>체크 없음</option>
+              <option value="참석" ${status === '참석' ? 'selected' : ''}>참석 ✅</option>
+              <option value="미정" ${status === '미정' ? 'selected' : ''}>미정 🤔</option>
+              <option value="불참" ${status === '불참' ? 'selected' : ''}>불참 ❌</option>
+            </select>
+            <button class="tiny-action-btn" onclick="adminSetLightningAttendance('${id}')">저장</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function adminParticipantRow(p) {
+      const id = escapeAttr(p.id);
+      const goal = p.goalKm == null || p.goalKm === '' ? '' : Number(p.goalKm);
+      const order = p.order == null ? '' : Number(p.order);
+      return `
+        <div class="admin-row admin-member-row">
+          <div>
+            <div class="admin-card-head">
+              <strong>${displayEmoji(p)} ${escapeHtml(p.name || p.id)}</strong>
+              <span>${p.active ? '활성 멤버' : '비활성 멤버'} · ID ${escapeHtml(p.id)}</span>
+            </div>
+            <div class="admin-edit-grid">
+              <label>이름<input id="adminName-${id}" type="text" maxlength="16" value="${escapeAttr(p.name || '')}" /></label>
+              <label>이모지<input id="adminEmoji-${id}" type="text" maxlength="8" value="${escapeAttr(p.emoji || '')}" /></label>
+              <label>주간 목표(km)<input id="adminGoal-${id}" type="number" inputmode="decimal" min="0.01" max="300" step="0.1" value="${escapeAttr(goal)}" /></label>
+              <label>표시 순서<input id="adminOrder-${id}" type="number" inputmode="numeric" min="1" step="1" value="${escapeAttr(order)}" /></label>
+              <label class="wide">상태
+                <select id="adminActive-${id}">
+                  <option value="true" ${p.active ? 'selected' : ''}>활성</option>
+                  <option value="false" ${!p.active ? 'selected' : ''}>비활성</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="admin-actions-inline">
+            <button class="tiny-action-btn" onclick="adminUpdateParticipant('${id}')">저장</button>
+            <button class="tiny-action-btn ${p.active ? 'danger' : ''}" onclick="adminSetParticipantActive('${id}', ${p.active ? 'false' : 'true'})">${p.active ? '비활성' : '활성'}</button>
+            <button class="tiny-action-btn danger" onclick="adminDeleteParticipant('${id}')">삭제</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function adminRecordRow(r, participants) {
+      const id = escapeAttr(r.recordId);
+      const deleted = String(r.status || '').indexOf('삭제') === 0;
+      const minutes = r.durationMinutes !== '' && r.durationMinutes != null ? r.durationMinutes : (r.durationSeconds ? Math.floor(Number(r.durationSeconds) / 60) : '');
+      const secondsPart = r.durationSecondsPart !== '' && r.durationSecondsPart != null ? r.durationSecondsPart : (r.durationSeconds ? Number(r.durationSeconds) % 60 : '');
+      const proofText = r.hasProofPhoto ? (r.proofPhotoPublic === false ? '인증샷 비공개' : '인증샷 공개') : '인증샷 없음';
+      return `
+        <details class="admin-record-detail ${deleted ? 'deleted' : ''}">
+          <summary class="admin-record-summary">
+            <div class="admin-record-meta">
+              <strong>${escapeHtml(r.name || '-')} · ${Number(r.distanceKm || 0).toFixed(2)}km · ${escapeHtml(r.activityDate || '-')}</strong>
+              <span>${escapeHtml(r.durationText || '-')} · ${escapeHtml(r.status || '-')} · ${escapeHtml(r.inputMode || '-')}</span>
+            </div>
+            <span class="tiny-action-btn">${deleted ? '복구/수정' : '상세'}</span>
+          </summary>
+          <div class="admin-edit-grid">
+            <label class="wide">멤버
+              <select id="adminRecordParticipant-${id}">
+                ${adminParticipantOptions(participants, r.participantId)}
+              </select>
+            </label>
+            <label>날짜<input id="adminRecordDate-${id}" type="date" value="${escapeAttr(r.activityDate || todayLocalDate())}" /></label>
+            <label>거리(km)<input id="adminRecordDistance-${id}" type="number" inputmode="decimal" min="0.01" step="0.01" value="${escapeAttr(r.distanceKm || '')}" /></label>
+            <label>분<input id="adminRecordMinutes-${id}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(minutes)}" /></label>
+            <label>초<input id="adminRecordSeconds-${id}" type="number" inputmode="numeric" min="0" max="59" step="1" value="${escapeAttr(secondsPart)}" /></label>
+            <label>칼로리<input id="adminRecordCalories-${id}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(r.caloriesKcal || '')}" /></label>
+            <label>심박<input id="adminRecordHeart-${id}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(r.averageHeartRateBpm || '')}" /></label>
+            <label>케이던스<input id="adminRecordCadence-${id}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(r.cadenceSpm || '')}" /></label>
+            <label>고도상승<input id="adminRecordElevation-${id}" type="number" inputmode="numeric" min="0" step="1" value="${escapeAttr(r.elevationGainM || '')}" /></label>
+            <label class="wide">앱명<input id="adminRecordApp-${id}" type="text" value="${escapeAttr(r.appName || '')}" /></label>
+          </div>
+          <div class="admin-record-note">
+            업로드 ${escapeHtml(r.uploadedAt || '-')} · ${escapeHtml(proofText)}${r.memo ? ' · 메모 ' + escapeHtml(r.memo) : ''}${r.warnings ? ' · 경고 ' + escapeHtml(r.warnings) : ''}
+          </div>
+          <div class="admin-actions-inline">
+            <button class="tiny-action-btn" onclick="adminUpdateRecord('${id}')">수정 저장</button>
+            ${deleted ? `<button class="tiny-action-btn" onclick="adminRestoreRecord('${id}')">복구</button>` : `<button class="tiny-action-btn danger" onclick="adminDeleteRecord('${id}')">삭제</button>`}
+          </div>
+        </details>
+      `;
+    }
+
+    function adminParticipantOptions(participants, selectedId) {
+      return (participants || []).map((p) => {
+        const selected = String(p.id) === String(selectedId) ? 'selected' : '';
+        const suffix = p.active ? '' : ' · 비활성';
+        return `<option value="${escapeAttr(p.id)}" ${selected}>${displayEmoji(p)} ${escapeHtml(p.name || p.id)}${suffix}</option>`;
+      }).join('');
+    }
+
+    function handleAdminResult(res, fallbackMessage) {
+      if (!res || !res.ok) return showError(res && res.error ? res.error : fallbackMessage);
+      state.adminData = res;
+      renderAdminConsole(res);
+      syncParticipantsFromAdmin(res.participants || []);
+      if (Object.prototype.hasOwnProperty.call(res, 'announcement')) {
+        renderAnnouncement(res.announcement || null, false);
+      }
+      if (res.dashboard) renderDashboard(res.dashboard);
+      setStatus('success', res.message || fallbackMessage);
+    }
+
+    function syncParticipantsFromAdmin(participants) {
+      const active = (participants || []).filter(p => p.active).map((p) => Object.assign({}, p, {
+        displayName: p.name,
+        targetDistanceKm: p.goalKm
+      }));
+      state.participants = active;
+      if (state.selectedParticipantId && !active.some(p => String(p.id) === String(state.selectedParticipantId))) {
+        state.selectedParticipantId = '';
+      }
+      renderParticipants();
+    }
+
+    function adminUpdateParticipant(participantId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const patch = {
+        name: ($('adminName-' + participantId) && $('adminName-' + participantId).value) || '',
+        emoji: ($('adminEmoji-' + participantId) && $('adminEmoji-' + participantId).value) || '',
+        goalKm: ($('adminGoal-' + participantId) && $('adminGoal-' + participantId).value) || '',
+        order: ($('adminOrder-' + participantId) && $('adminOrder-' + participantId).value) || '',
+        active: (($('adminActive-' + participantId) && $('adminActive-' + participantId).value) || 'true') === 'true'
+      };
+      if (!patch.name.trim()) return showError('멤버 이름을 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '멤버 정보를 저장했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminUpdateParticipant(adminCode(), participantId, patch);
+    }
+
+    function adminDeleteParticipant(participantId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      if (!confirm('이 멤버를 목록에서 삭제 처리할까요? 기존 기록은 보존되고 비활성 멤버로 남습니다.')) return;
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '멤버를 삭제 처리했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminDeleteParticipant(adminCode(), participantId);
+    }
+
+    function adminSetParticipantActive(participantId, active) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '참가자 상태를 바꿨어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminSetParticipantActive(adminCode(), participantId, active);
+    }
+
+    function adminSetAllGoals() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const goal = Number(($('adminGoalKm') && $('adminGoalKm').value) || 0);
+      if (!goal || goal <= 0) return showError('일괄 변경할 목표 거리를 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '목표를 일괄 변경했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminSetAllGoals(adminCode(), goal);
+    }
+
+    function adminUpdateAnnouncement() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const eventDate = ($('adminAnnouncementDate') && $('adminAnnouncementDate').value) || '';
+      const eventTime = ($('adminAnnouncementTime') && $('adminAnnouncementTime').value) || '';
+      const location = cleanLightningLocationText(($('adminAnnouncementLocation') && $('adminAnnouncementLocation').value) || '');
+      const memo = (($('adminAnnouncementMemo') && $('adminAnnouncementMemo').value) || '').trim();
+      if (!eventDate) return showError('번개 모임 날짜를 입력해주세요.');
+      if (!eventTime) return showError('번개 모임 시간을 선택해주세요.');
+      if (!location) return showError('번개 모임 장소를 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '번개 모임 정보를 저장했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminUpdateAnnouncement(adminCode(), { eventDate, eventTime, location, memo, preserveEventId: true });
+    }
+
+    function adminClearAnnouncement() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      if (!confirm('현재 번개 모임을 비울까요? 기존 참석 기록 행은 시트에 남지만 앱 화면에서는 보이지 않습니다.')) return;
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '번개 모임을 비웠어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminClearAnnouncement(adminCode());
+    }
+
+    function adminSetLightningAttendance(participantId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const status = ($('adminLightningStatus-' + participantId) && $('adminLightningStatus-' + participantId).value) || '';
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '번개 참석 체크를 저장했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminSetLightningAttendance(adminCode(), participantId, status);
+    }
+
+    function adminSetRequestStatus(requestId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const status = ($('requestStatus-' + requestId) && $('requestStatus-' + requestId).value) || '접수';
+      const memo = ($('requestMemo-' + requestId) && $('requestMemo-' + requestId).value) || '';
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '수정 요청 상태를 저장했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminSetRecordRequestStatus(adminCode(), requestId, status, memo);
+    }
+
+    function adminUpdateRecord(recordId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      const secondsPart = Number(($('adminRecordSeconds-' + recordId) && $('adminRecordSeconds-' + recordId).value) || 0);
+      if (secondsPart < 0 || secondsPart > 59) return showError('초는 0~59 사이로 입력해주세요.');
+      const review = {
+        participantId: ($('adminRecordParticipant-' + recordId) && $('adminRecordParticipant-' + recordId).value) || '',
+        runningDate: ($('adminRecordDate-' + recordId) && $('adminRecordDate-' + recordId).value) || todayLocalDate(),
+        distanceKm: ($('adminRecordDistance-' + recordId) && $('adminRecordDistance-' + recordId).value) || '',
+        durationMinutes: Number(($('adminRecordMinutes-' + recordId) && $('adminRecordMinutes-' + recordId).value) || 0),
+        durationSecondsPart: secondsPart,
+        caloriesKcal: ($('adminRecordCalories-' + recordId) && $('adminRecordCalories-' + recordId).value) || '',
+        averageHeartRateBpm: ($('adminRecordHeart-' + recordId) && $('adminRecordHeart-' + recordId).value) || '',
+        cadenceSpm: ($('adminRecordCadence-' + recordId) && $('adminRecordCadence-' + recordId).value) || '',
+        elevationGainM: ($('adminRecordElevation-' + recordId) && $('adminRecordElevation-' + recordId).value) || '',
+        appName: ($('adminRecordApp-' + recordId) && $('adminRecordApp-' + recordId).value) || ''
+      };
+      if (!review.distanceKm || Number(review.distanceKm) <= 0) return showError('달린 거리(km)를 입력해주세요.');
+      if (review.durationMinutes <= 0 && review.durationSecondsPart <= 0) return showError('달린 시간(분/초)을 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '기록을 수정했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminUpdateRecord(adminCode(), recordId, review);
+    }
+
+    function adminDeleteRecord(recordId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      if (!confirm('이 기록을 삭제 처리할까요? 대시보드에서는 제외되고 관리자 복구가 가능합니다.')) return;
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '기록을 삭제했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminDeleteRecord(adminCode(), recordId);
+    }
+
+    function adminRestoreRecord(recordId) {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '삭제 기록을 복구했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminRestoreRecord(adminCode(), recordId);
+    }
+
+    function adminRefreshDashboard() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      google.script.run
+        .withSuccessHandler((res) => handleAdminResult(res, '대시보드를 다시 계산했어요.'))
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminRefreshDashboard(adminCode());
+    }
+
+    function adminDownloadBackup() {
+      if (!adminCode()) return showError('관리자 코드를 입력해주세요.');
+      setStatus('info', '전체 백업 CSV를 만드는 중이에요.');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '백업을 만들지 못했어요.');
+          downloadTextFile(res.fileName || 'running-challenge-backup.csv', res.csv || '', 'text/csv;charset=utf-8');
+          setStatus('success', res.message || '백업 CSV를 내려받았어요.');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .adminExportBackup(adminCode());
+    }
+</script>
