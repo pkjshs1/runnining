@@ -1,0 +1,798 @@
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+      if (state.isDashboardOnly) $('app').classList.add('dashboard-only');
+      if (!state.isAdminView) {
+        const adminPanel = $('adminPanel');
+        if (adminPanel) adminPanel.remove();
+      }
+      setupLightningFormDefaults();
+      $('file').addEventListener('change', handleFileChange);
+      $('proofFile').addEventListener('change', handleProofFileChange);
+      $('proofPublic').addEventListener('change', () => {
+        state.proofPhotoPublic = Boolean($('proofPublic').checked);
+      });
+      $('submitBtn').addEventListener('click', handleSubmit);
+      $('nickname').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') registerNickname();
+      });
+      if ($('announcementLocation')) {
+        $('announcementLocation').addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') submitAnnouncement();
+        });
+      }
+      $('announcementPopup').addEventListener('click', (e) => {
+        if (e.target === $('announcementPopup')) closeAnnouncementPopup();
+      });
+      loadInitialData();
+    });
+
+    function loadInitialData() {
+      const restored = restoreInitialDataFromBrowserCache();
+      if (!restored) setStatus('info', '참가자와 대시보드를 불러오는 중이에요 🌱');
+      const refresh = () => {
+      google.script.run
+        .withSuccessHandler((data) => {
+          if (!data || !data.ok) return showError(data && data.error ? data.error : '초기 데이터를 불러오지 못했어요.');
+          applyInitialData(data);
+          saveInitialDataToBrowserCache(data);
+          if (data.dashboardDeferred || !data.dashboard) loadDashboardData(false);
+          clearStatus();
+          updateSubmitState();
+        })
+        .withFailureHandler((err) => {
+          if (!restored) showError(errorMessage(err));
+          else setStatus('info', '저장된 화면을 먼저 보여드렸어요. 네트워크가 안정되면 새 데이터로 바뀝니다 🌿');
+        })
+        .getInitialData();
+      };
+      if (restored) window.setTimeout(refresh, 700);
+      else refresh();
+    }
+
+    function applyInitialData(data) {
+      state.participants = data.participants || [];
+      state.maxUploadBytes = data.maxUploadBytes || state.maxUploadBytes;
+      state.memberStatuses = data.memberStatuses || {};
+      renderAnnouncement(data.announcement || null, true);
+      renderParticipants();
+      if (data.dashboard) renderDashboard(data.dashboard);
+      else $('dashboard').innerHTML = '<div class="empty">대시보드를 빠르게 준비하는 중...</div>';
+    }
+
+    function loadDashboardData(showToast = false) {
+      google.script.run
+        .withSuccessHandler((res) => {
+          const dashboard = res && res.dashboard ? res.dashboard : res;
+          if (!dashboard || res && res.ok === false) return showError(res && res.error ? res.error : '대시보드를 불러오지 못했어요.');
+          renderDashboard(dashboard);
+          ensureSelectedPersonalStatsLoaded(false);
+          if (showToast) setStatus('success', '러닝 대시보드를 새로고침했어요.');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .getDashboardSummary();
+    }
+
+    function restoreInitialDataFromBrowserCache() {
+      try {
+        const raw = localStorage.getItem(browserCacheKey('initialData'));
+        if (!raw) return false;
+        const cached = JSON.parse(raw);
+        if (!cached || !cached.savedAt || Date.now() - cached.savedAt > 5 * 60 * 1000) return false;
+        if (!cached.data || !cached.data.participants) return false;
+        applyInitialData(cached.data);
+        if (cached.data.dashboardDeferred || !cached.data.dashboard) loadDashboardData(false);
+        updateSubmitState();
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function saveInitialDataToBrowserCache(data) {
+      try {
+        localStorage.setItem(browserCacheKey('initialData'), JSON.stringify({ savedAt: Date.now(), data }));
+      } catch (err) {
+      }
+    }
+
+    function browserCacheKey(key) {
+      return 'runningChallenge.' + String(window.APP_VERSION || 'v42') + '.' + key;
+    }
+
+    function renderAnnouncement(announcement, showPopup) {
+      state.announcement = announcement || null;
+      const banner = $('announcementBanner');
+      const meta = $('announcementMeta');
+      const expire = $('announcementExpire');
+      window.clearTimeout(state.announcementExpiryTimer);
+
+      if (!announcement || !announcement.text) {
+        banner.className = 'notice-banner empty';
+        banner.textContent = '등록된 번개 모임이 없어요.';
+        meta.textContent = '';
+        expire.textContent = '날짜와 시간 선택 가능';
+        renderLightningAttendance(null);
+        closeAnnouncementPopup();
+        return;
+      }
+
+      const whenText = lightningDateTimeText(announcement);
+      const attendance = announcement.attendance || {};
+      banner.className = 'notice-banner';
+      banner.textContent = lightningAnnouncementLines(announcement).join('\n');
+      expire.textContent = whenText || '날짜 미정';
+      meta.innerHTML = lightningAnnouncementMetaHtml(announcement);
+      renderLightningAttendance(announcement);
+      scheduleAnnouncementExpiry(announcement);
+      if (showPopup) showAnnouncementPopupOnce(announcement);
+    }
+
+    function lightningDateTimeText(announcement) {
+      if (!announcement) return '';
+      const date = announcement.eventDate || '';
+      const time = announcement.eventTime || '';
+      if (date && time) return `${date} ${time}`;
+      if (date) return date;
+      if (time) return time;
+      return '';
+    }
+
+    function cleanLightningLocationText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    }
+
+    function lightningAnnouncementLines(announcement) {
+      const lines = ['러닝 번개 모임'];
+      const whenText = lightningDateTimeText(announcement);
+      const locationText = cleanLightningLocationText(announcement && announcement.location);
+      if (whenText) lines.push('⏰ ' + whenText);
+      if (locationText) lines.push('📍 ' + locationText);
+      return lines;
+    }
+
+    function lightningAnnouncementMetaHtml(announcement) {
+      const attendance = announcement.attendance || {};
+      const items = [
+        `${escapeHtml(announcement.createdAt || announcement.date || '오늘')} 등록`,
+        `참석 ${Number(attendance.yes || 0)}명`,
+        `미정 ${Number(attendance.maybe || 0)}명`,
+        `불참 ${Number(attendance.no || 0)}명`
+      ];
+      if (announcement.memo) items.push(`메모 ${escapeHtml(announcement.memo)}`);
+      return items.join(' · ');
+    }
+
+    function scheduleAnnouncementExpiry(announcement) {
+      let target = new Date();
+      const date = announcement && announcement.eventDate ? String(announcement.eventDate) : '';
+      if (/^20\d{2}-\d{2}-\d{2}$/.test(date)) {
+        const parts = date.split('-').map(Number);
+        target = new Date(parts[0], parts[1] - 1, parts[2]);
+      }
+      target.setHours(24, 0, 0, 0);
+      const delay = Math.max(1000, target.getTime() - Date.now());
+      state.announcementExpiryTimer = window.setTimeout(() => renderAnnouncement(null, false), Math.min(delay, 2147483647));
+    }
+
+    function submitAnnouncement() {
+      const eventDate = ($('announcementDate') && $('announcementDate').value) || '';
+      const eventTime = ($('announcementTime') && $('announcementTime').value) || '';
+      const location = cleanLightningLocationText(($('announcementLocation') && $('announcementLocation').value) || '');
+      const memo = (($('announcementMemo') && $('announcementMemo').value) || '').trim();
+      if (!eventDate) return showError('번개 모임 날짜를 선택해주세요.');
+      if (!eventTime) return showError('번개 모임 시간을 선택해주세요.');
+      if (!location) return showError('번개 모임 장소를 입력해주세요.');
+      const payload = { eventDate, eventTime, location, memo };
+      setStatus('info', '번개 모임을 등록하는 중이에요 ⚡');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '번개 모임 등록에 실패했어요.');
+          if ($('announcementLocation')) $('announcementLocation').value = '';
+          ['announcementMemo'].forEach((id) => { if ($(id)) $(id).value = ''; });
+          renderAnnouncement(res.announcement || null, false);
+          setStatus('success', res.message || '번개 모임을 등록했어요.');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .saveAnnouncement(payload);
+    }
+
+    function renderLightningAttendance(announcement) {
+      const box = $('lightningAttendance');
+      if (!box) return;
+      if (!announcement || !announcement.text) {
+        box.innerHTML = '<div class="tiny">번개 모임이 등록되면 여기에서 참석 여부를 체크할 수 있어요.</div>';
+        return;
+      }
+      const attendance = announcement.attendance || {};
+      const attendees = Array.isArray(attendance.attendees) ? attendance.attendees : [];
+      const chips = attendees.length ? attendees.map((item) => {
+        const icon = item.status === '참석' ? '✅' : (item.status === '불참' ? '❌' : '🤔');
+        const emoji = item.emoji || '';
+        return `<span class="rsvp-chip">${icon} ${emoji ? escapeHtml(emoji) + ' ' : ''}${escapeHtml(item.name || '이름 없음')} · ${escapeHtml(item.status)}</span>`;
+      }).join('') : '<span class="rsvp-chip">아직 참석 체크가 없어요</span>';
+      const selected = state.participants.find(p => p.id === state.selectedParticipantId);
+      const selectedText = selected ? `${displayEmoji(selected)} ${escapeHtml(selected.displayName || selected.name)} 님으로 체크` : '닉네임을 먼저 선택해주세요';
+      const detailRows = [
+        announcement.memo ? `<span>📝 ${escapeHtml(announcement.memo)}</span>` : ''
+      ].filter(Boolean).join('');
+      box.innerHTML = `
+        <div class="rsvp-title">
+          <span>참석 체크</span>
+          <span>참석 ${Number(attendance.yes || 0)} · 미정 ${Number(attendance.maybe || 0)} · 불참 ${Number(attendance.no || 0)}</span>
+        </div>
+        <div class="tiny">${selectedText}</div>
+        ${detailRows ? `<div class="rsvp-detail-list">${detailRows}</div>` : ''}
+        <div class="rsvp-actions">
+          <button type="button" class="rsvp-btn yes" onclick="submitLightningAttendance('참석')">참석 ✅</button>
+          <button type="button" class="rsvp-btn maybe" onclick="submitLightningAttendance('미정')">미정 🤔</button>
+          <button type="button" class="rsvp-btn no" onclick="submitLightningAttendance('불참')">불참 ❌</button>
+        </div>
+        <div class="rsvp-list">${chips}</div>
+      `;
+    }
+
+    function submitLightningAttendance(status) {
+      if (!state.selectedParticipantId) {
+        const section = $('nicknameSection');
+        if (section) section.open = true;
+        return showError('참석 여부를 체크하려면 먼저 닉네임을 선택해주세요.');
+      }
+      if (!state.announcement || !state.announcement.eventId) return showError('현재 등록된 번개 모임이 없어요.');
+      setStatus('info', '번개 모임 참석 여부를 저장하는 중이에요 ⚡');
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '참석 여부를 저장하지 못했어요.');
+          renderAnnouncement(res.announcement || null, false);
+          setStatus('success', res.message || '참석 여부를 저장했어요.');
+        })
+        .withFailureHandler((err) => showError(errorMessage(err)))
+        .submitLightningAttendance(state.selectedParticipantId, status, '');
+    }
+
+    function showAnnouncementPopupOnce(announcement) {
+      if (!announcement || !announcement.text) return;
+      const key = `${announcement.eventId || ''}|${announcement.createdAt || ''}|${announcement.text}`;
+      try {
+        if (sessionStorage.getItem('runningChallenge.noticePopup') === key) return;
+        sessionStorage.setItem('runningChallenge.noticePopup', key);
+      } catch (err) {
+      }
+      const whenText = lightningDateTimeText(announcement);
+      $('announcementPopupBody').textContent = lightningAnnouncementLines(announcement).join('\n');
+      $('announcementPopupExpire').textContent = whenText || '날짜 미정';
+      $('announcementPopup').classList.add('show');
+    }
+
+    function closeAnnouncementPopup() {
+      const popup = $('announcementPopup');
+      if (popup) popup.classList.remove('show');
+    }
+
+function setupLightningFormDefaults() {
+      const dateInput = $('announcementDate');
+      const timeSelect = $('announcementTime');
+      if (dateInput) {
+        dateInput.min = todayLocalDate();
+        if (!dateInput.value) dateInput.value = todayLocalDate();
+      }
+      if (!timeSelect) return;
+      timeSelect.innerHTML = lightningTimeOptions('');
+      const now = new Date();
+      let defaultMinutes = now.getMinutes() <= 30 ? 30 : 60;
+      let hour = now.getHours();
+      let minute = defaultMinutes === 60 ? '00' : '30';
+      if (defaultMinutes === 60) hour += 1;
+      if (hour < 5) hour = 7;
+      if (hour > 23) hour = 20;
+      const defaultValue = `${String(hour).padStart(2, '0')}:${minute}`;
+      if ([...timeSelect.options].some(option => option.value === defaultValue)) timeSelect.value = defaultValue;
+    }
+
+    function lightningTimeOptions(selectedValue) {
+      const selected = String(selectedValue || '');
+      const options = [`<option value="" ${!selected ? 'selected' : ''}>시간 선택</option>`];
+      for (let hour = 5; hour <= 23; hour += 1) {
+        ['00', '30'].forEach((minute) => {
+          const value = `${String(hour).padStart(2, '0')}:${minute}`;
+          const selectedAttr = value === selected ? 'selected' : '';
+          options.push(`<option value="${value}" ${selectedAttr}>${formatLightningTimeOption(value)}</option>`);
+        });
+      }
+      return options.join('');
+    }
+
+    function formatLightningTimeOption(value) {
+      const [h, m] = String(value || '').split(':').map(Number);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return value || '';
+      const ampm = h < 12 ? '오전' : '오후';
+      const hour12 = h % 12 || 12;
+      return `${ampm} ${hour12}:${String(m).padStart(2, '0')}`;
+    }
+function registerNickname() {
+      const nickname = $('nickname').value.trim();
+      if (!nickname) return showError('새 닉네임을 입력해주세요.');
+      $('joinBtn').disabled = true;
+      setStatus('info', '닉네임을 등록하는 중이에요 ✨');
+
+      google.script.run
+        .withSuccessHandler((res) => {
+          $('joinBtn').disabled = false;
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '닉네임 등록에 실패했어요.');
+          state.participants = res.participants || [];
+          state.selectedParticipantId = res.participant.id;
+          $('nickname').value = '';
+          renderParticipants();
+          renderLightningAttendance(state.announcement);
+          if (res.dashboard) renderDashboard(res.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+          setStatus('success', `${displayEmoji(res.participant)} ${res.participant.displayName} 닉네임이 등록됐어요. 이제 사진을 올려주세요 🌸`);
+          updateSubmitState();
+        })
+        .withFailureHandler((err) => {
+          $('joinBtn').disabled = false;
+          showError(errorMessage(err));
+        })
+        .registerNickname(nickname);
+    }
+
+    function renderParticipants() {
+      const box = $('runnerList');
+      if (!state.participants.length) {
+        box.innerHTML = '<div class="empty">아직 닉네임이 없어요.<br />첫 닉네임을 만들어주세요.</div>';
+        renderSelectedRunnerTools();
+        renderPersonalStats();
+        return;
+      }
+      box.innerHTML = state.participants.map((p) => {
+        const active = p.id === state.selectedParticipantId ? 'active' : '';
+        return `<button type="button" class="runner-chip ${active}" onclick="selectParticipant('${escapeAttr(p.id)}')"><span class="chip-emoji">${displayEmoji(p)}</span><span>${escapeHtml(p.displayName || p.name)}</span></button>`;
+      }).join('');
+      renderSelectedRunnerTools();
+      renderPersonalStats();
+    }
+function renderSelectedRunnerTools() {
+      const box = $('selectedRunnerTools');
+      if (!box) return;
+      const person = state.participants.find(p => p.id === state.selectedParticipantId);
+      if (!person) {
+        box.className = 'selected-tools';
+        box.innerHTML = '';
+        return;
+      }
+      box.className = 'selected-tools show';
+      const goalHint = selectedGoalHintHtml(person);
+      box.innerHTML = `
+        <span>선택됨 · ${displayEmoji(person)} ${escapeHtml(person.displayName || person.name)}</span>
+        ${goalHint}
+        <button type="button" class="emoji-reroll-btn primary-mini" onclick="openPersonalStats()">이번 주 기록 보기</button>
+        <button type="button" class="emoji-reroll-btn" onclick="rerollEmoji()">이모지 다시 뽑기 🎲</button>
+      `;
+    }
+
+    function selectedGoalHintHtml(person) {
+      const dashboard = state.dashboard || {};
+      const progress = (dashboard.weeklyProgress || []).find(row => String(row.participantId || '') === String(state.selectedParticipantId));
+      if (!progress) return '<span class="goal-hint">이번 주 기록은 저장 후 자동으로 쌓여요 🌱</span>';
+      const percent = Number(progress.percent || 0);
+      const distance = Number(progress.distanceKm || 0);
+      const goal = Number(progress.goalKm || progress.defaultGoalKm || dashboard.weeklyGoalKm || 0);
+      if (!goal) return '<span class="goal-hint">이번 주 기록을 가볍게 쌓아봐요 👟</span>';
+      if (percent >= 100) {
+        return `<span class="goal-hint done">🥇 목표 달성 · 이번 주 ${distance.toFixed(2)}km</span>`;
+      }
+      const remaining = Math.max(0, goal - distance);
+      const day = new Date().getDay();
+      const dayIndex = day === 0 ? 6 : day - 1;
+      const daysLeft = Math.max(1, 7 - dayIndex);
+      const perDay = remaining / daysLeft;
+      return `<span class="goal-hint">목표까지 ${remaining.toFixed(2)}km · 하루 ${perDay.toFixed(2)}km씩이면 가능해요</span>`;
+    }
+
+    function rerollEmoji() {
+      if (!state.selectedParticipantId) return showError('이모지를 바꿀 닉네임을 먼저 선택해주세요.');
+      const id = state.selectedParticipantId;
+      const person = state.participants.find(p => p.id === id);
+      const oldEmoji = person ? person.emoji : '';
+      const optimisticEmoji = pickLocalRerollEmoji(oldEmoji);
+      applyEmojiEverywhere(id, optimisticEmoji);
+      renderParticipants();
+      if (state.dashboard) renderDashboard(state.dashboard);
+      setStatus('info', `${optimisticEmoji} 새 이모지를 적용하는 중이에요 🎲`);
+
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!res || !res.ok) {
+            if (oldEmoji) applyEmojiEverywhere(id, oldEmoji);
+            renderParticipants();
+            if (state.dashboard) renderDashboard(state.dashboard);
+            return showError(res && res.error ? res.error : '이모지를 바꾸지 못했어요.');
+          }
+          if (res.participants) state.participants = res.participants;
+          const finalEmoji = res.emoji || (res.participant && res.participant.emoji) || optimisticEmoji;
+          applyEmojiEverywhere(id, finalEmoji);
+          if (res.participant && res.participant.id) state.selectedParticipantId = res.participant.id;
+          renderParticipants();
+          if (state.dashboard) renderDashboard(state.dashboard);
+          setStatus('success', `${finalEmoji} 새 이모지로 바뀌었어요.`);
+        })
+        .withFailureHandler((err) => {
+          if (oldEmoji) applyEmojiEverywhere(id, oldEmoji);
+          renderParticipants();
+          if (state.dashboard) renderDashboard(state.dashboard);
+          showError(errorMessage(err));
+        })
+        .rerollParticipantEmoji(id);
+    }
+
+    function pickLocalRerollEmoji(currentEmoji) {
+      const pool = FALLBACK_EMOJIS.filter(e => e !== currentEmoji);
+      return pool[Math.floor(Math.random() * pool.length)] || '🌷';
+    }
+
+    function applyEmojiEverywhere(participantId, emoji) {
+      state.participants = (state.participants || []).map(p => String(p.id || '') === String(participantId) ? Object.assign({}, p, { emoji }) : p);
+      const dashboard = state.dashboard;
+      if (!dashboard) return;
+      ['weeklyProgress', 'weeklyLeaderboard', 'monthlyLeaderboard', 'allTimeLeaderboard', 'todayRecords', 'todayRunnerTotals', 'todayProofPhotos', 'weeklyProofPhotos'].forEach((key) => {
+        (dashboard[key] || []).forEach((item) => {
+          if (String(item.participantId || '') === String(participantId)) item.emoji = emoji;
+        });
+      });
+      ['memberWeeklyStats', 'memberLastWeekStats', 'memberAllTimeStats'].forEach((key) => {
+        if (dashboard[key] && dashboard[key][participantId]) dashboard[key][participantId].emoji = emoji;
+      });
+    }
+
+    function selectParticipant(id) {
+      state.selectedParticipantId = id;
+      state.personalStatsOpen = false;
+      renderParticipants();
+      updateSubmitState();
+      const person = state.participants.find(p => p.id === id);
+      renderSelectedRunnerTools();
+      renderPersonalStats();
+      renderLightningAttendance(state.announcement);
+      if (person) setStatus('info', `${displayEmoji(person)} ${person.displayName || person.name} 님으로 선택했어요. 인증샷을 올려주세요 👟`);
+    }
+
+    async function handleFileChange(event) {
+      const file = event.target.files && event.target.files[0];
+      state.selectedImage = null;
+      $('preview').style.display = 'none';
+      $('imageMeta').innerHTML = '';
+      $('result').style.display = 'none';
+      updateSubmitState();
+      if (!file) return;
+      if (!file.type.startsWith('image/')) return showError('이미지 파일만 업로드할 수 있어요.');
+
+      try {
+        setStatus('info', '사진을 예쁘게 정리해서 업로드 준비 중이에요 🫧');
+        const compressed = await resizeImageToDataUrl(file, 1280, 0.84);
+        const approxBytes = dataUrlBytes(compressed.dataUrl);
+        if (approxBytes > state.maxUploadBytes) {
+          return showError(`이미지가 커요. 현재 약 ${formatMb(approxBytes)}MB, 제한 ${formatMb(state.maxUploadBytes)}MB입니다. 캡처를 조금 잘라서 다시 올려주세요.`);
+        }
+        state.selectedImage = {
+          dataUrl: compressed.dataUrl,
+          fileName: file.name || 'running-upload.jpg',
+          originalBytes: file.size,
+          bytes: approxBytes,
+          width: compressed.width,
+          height: compressed.height
+        };
+        $('previewImg').src = compressed.dataUrl;
+        $('preview').style.display = 'block';
+        $('imageMeta').innerHTML = `
+          <span class="pill">원본 ${formatMb(file.size)}MB</span>
+          <span class="pill">업로드 ${formatMb(approxBytes)}MB</span>
+          <span class="pill">${compressionSavingText(file.size, approxBytes)}</span>
+          <span class="pill">${compressed.width}×${compressed.height}</span>
+        `;
+        setStatus('success', '사진 준비 완료! 이제 저장 버튼을 눌러주세요 💫');
+      } catch (err) {
+        showError(errorMessage(err));
+      } finally {
+        updateSubmitState();
+      }
+    }
+
+    async function handleProofFileChange(event) {
+      const file = event.target.files && event.target.files[0];
+      state.selectedProofPhoto = null;
+      state.proofPhotoPublic = false;
+      $('proofPublic').checked = false;
+      $('proofPublicRow').className = 'consent-row';
+      $('proofPreview').style.display = 'none';
+      $('proofMeta').innerHTML = '';
+      if (!file) return;
+      if (!file.type.startsWith('image/')) return showError('러닝 인증샷도 이미지 파일만 올릴 수 있어요.');
+
+      try {
+        setStatus('info', '러닝 인증샷을 작게 정리하고 있어요 🤳');
+        const compressed = await resizeImageToDataUrl(file, 900, 0.76);
+        const approxBytes = dataUrlBytes(compressed.dataUrl);
+        if (approxBytes > state.maxUploadBytes) {
+          state.selectedProofPhoto = null;
+          return showError(`인증샷 이미지가 커요. 현재 약 ${formatMb(approxBytes)}MB, 제한 ${formatMb(state.maxUploadBytes)}MB입니다. 사진을 조금 줄여서 다시 올려주세요.`);
+        }
+        state.selectedProofPhoto = {
+          dataUrl: compressed.dataUrl,
+          fileName: file.name || 'running-proof.jpg',
+          originalBytes: file.size,
+          bytes: approxBytes,
+          width: compressed.width,
+          height: compressed.height
+        };
+        $('proofPreviewImg').src = compressed.dataUrl;
+        $('proofPreview').style.display = 'block';
+        $('proofPublicRow').className = 'consent-row show';
+        $('proofMeta').innerHTML = `
+          <span class="pill">선택 업로드</span>
+          <span class="pill">업로드 ${formatMb(approxBytes)}MB</span>
+          <span class="pill">${compressionSavingText(file.size, approxBytes)}</span>
+          <span class="pill">${compressed.width}×${compressed.height}</span>
+        `;
+        setStatus('success', '러닝 인증샷도 함께 저장할 준비가 됐어요 🌿');
+      } catch (err) {
+        showError(errorMessage(err));
+      }
+    }
+
+    function startManualEntry() {
+      if (state.isUploading) return;
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      if (!state.selectedImage) return showError('러닝 인증 사진을 선택해주세요.');
+      state.reviewPayload = { mode: 'manual', extracted: {} };
+      setStatus('info', '날짜·거리·시간을 직접 입력해서 저장할 수 있어요 ✍️');
+      renderReviewForm({}, 'manual');
+    }
+
+    function handleSubmit() {
+      if (state.isUploading) return;
+      if (!state.selectedParticipantId) return showError('먼저 내 닉네임을 클릭해주세요.');
+      if (!state.selectedImage) return showError('러닝 인증 사진을 선택해주세요.');
+
+      const payload = {
+        participantId: state.selectedParticipantId,
+        dataUrl: state.selectedImage.dataUrl,
+        fileName: state.selectedImage.fileName,
+        proofPhotoDataUrl: state.selectedProofPhoto ? state.selectedProofPhoto.dataUrl : '',
+        proofPhotoFileName: state.selectedProofPhoto ? state.selectedProofPhoto.fileName : '',
+        proofPhotoPublic: Boolean(state.selectedProofPhoto && state.proofPhotoPublic),
+        note: ''
+      };
+
+      state.isUploading = true;
+      state.reviewPayload = null;
+      updateSubmitState();
+      $('result').style.display = 'none';
+      $('result').innerHTML = '';
+      setStatus('info', 'AI 자동 인식으로 캡처를 읽고 있어요. 잠시만요 🏃‍♀️');
+
+      google.script.run
+        .withSuccessHandler((res) => {
+          state.isUploading = false;
+          updateSubmitState();
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '업로드에 실패했어요.');
+          if (res.duplicate) {
+            setStatus('info', res.message || '이미 업로드된 사진이에요.');
+            if (res.dashboard) renderDashboard(res.dashboard);
+            return;
+          }
+          if (res.needsManual) {
+            setStatus('info', res.message || 'AI가 읽지 못했어요. 직접 입력해서 저장할 수 있어요.');
+            renderReviewForm(res.extracted || {}, 'manual');
+            return;
+          }
+          if (res.needsReview) {
+            setStatus('info', res.message || 'AI가 읽은 값을 확인해주세요.');
+            renderReviewForm(res.extracted || {}, 'review');
+            return;
+          }
+          if (res.needsDuplicateConfirm) {
+            setStatus('warning', res.message || '비슷한 기록이 있어요. 중복이 아니면 확인 후 저장해주세요.');
+            renderReviewForm(Object.assign({}, res.extracted || {}, {
+              rawExtracted: res.rawExtracted || null,
+              suspectedDuplicate: res.suspectedDuplicate || null
+            }), 'duplicate');
+            return;
+          }
+          setStatus('success', res.message || '저장 완료!');
+          triggerCelebration('러닝 저장 완료');
+          if (res.dashboard) renderDashboard(res.dashboard);
+          renderResult(res.extracted || res.record || {}, res.dashboard || state.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+        })
+        .withFailureHandler((err) => {
+          state.isUploading = false;
+          updateSubmitState();
+          showError(errorMessage(err));
+        })
+        .submitRun(payload);
+    }
+
+    function renderReviewForm(data, mode) {
+      const isManual = mode === 'manual' || mode === 'manual-duplicate';
+      const isDuplicateConfirm = mode === 'duplicate' || mode === 'manual-duplicate';
+      const dateValue = data.runningDate || todayLocalDate();
+      const distanceValue = data.distanceKm || '';
+      const totalSeconds = Number(data.durationSeconds || 0);
+      const minutesValue = totalSeconds ? Math.floor(totalSeconds / 60) : '';
+      const secondsValue = totalSeconds ? totalSeconds % 60 : '';
+      const confidenceText = data.confidence !== null && data.confidence !== undefined ? `${Math.round(Number(data.confidence) * 100)}%` : '-';
+
+      const duplicate = data.suspectedDuplicate || null;
+      const duplicateHtml = duplicate ? `
+        <div class="status warning" style="display:block">
+          비슷한 기존 기록: ${escapeHtml(duplicate.activityDate || '-')} · ${Number(duplicate.distanceKm || 0).toFixed(2)}km · ${escapeHtml(duplicate.durationText || '-')}
+        </div>
+      ` : '';
+      const title = isDuplicateConfirm ? '⚠️ 비슷한 기록 확인하기' : (isManual ? '✍️ 수동 입력으로 저장하기' : '🔎 AI 자동 인식 결과 확인하기');
+      const helper = isDuplicateConfirm
+        ? '같은 날짜에 거의 같은 기록이 있어요. 실제로 다른 러닝이면 확인하고 저장해주세요.'
+        : (isManual ? '날짜·거리·시간을 직접 입력해 인증샷과 함께 저장합니다.' : `AI 신뢰도 ${escapeHtml(confidenceText)}예요. 값이 맞으면 저장하고, 다르면 수정해주세요.`);
+
+      state.reviewPayload = { mode, extracted: data, rawExtracted: data.rawExtracted || null, suspectedDuplicate: duplicate };
+      $('result').innerHTML = `
+        <div class="review-panel">
+          <p class="review-title">${title}</p>
+          <div class="tiny">${helper}</div>
+          ${duplicateHtml}
+          <div class="manual-grid">
+            <label class="wide">달린 날짜
+              <input id="reviewDate" type="date" value="${escapeAttr(dateValue)}" />
+            </label>
+            <label>거리(km)
+              <input id="reviewDistance" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="예: 5.2" value="${escapeAttr(distanceValue)}" />
+            </label>
+            <label>시간(분)
+              <input id="reviewMinutes" type="number" inputmode="numeric" min="0" step="1" placeholder="예: 31" value="${escapeAttr(minutesValue)}" />
+            </label>
+            <label>시간(초)
+              <input id="reviewSeconds" type="number" inputmode="numeric" min="0" max="59" step="1" placeholder="예: 8" value="${escapeAttr(secondsValue)}" />
+            </label>
+            <label>칼로리(선택)
+              <input id="reviewCalories" type="number" inputmode="numeric" min="0" step="1" placeholder="선택" value="${escapeAttr(data.caloriesKcal || '')}" />
+            </label>
+          </div>
+          <div class="review-actions">
+            <button class="soft-btn" onclick="saveReviewedRun('${escapeAttr(mode)}')">확인하고 저장하기</button>
+            <button class="soft-btn secondary" onclick="resetReviewForm()">다른 사진 선택하기</button>
+          </div>
+        </div>
+      `;
+      $('result').style.display = 'block';
+    }
+
+    function saveReviewedRun(mode) {
+      if (state.isUploading) return;
+      if (!state.selectedParticipantId || !state.selectedImage) return showError('닉네임과 인증 사진을 다시 확인해주세요.');
+
+      const minutes = Number($('reviewMinutes').value || 0);
+      const secondsPart = Number($('reviewSeconds').value || 0);
+      const review = {
+        runningDate: $('reviewDate').value,
+        distanceKm: $('reviewDistance').value,
+        durationMinutes: minutes,
+        durationSecondsPart: secondsPart,
+        caloriesKcal: $('reviewCalories').value,
+        confidence: state.reviewPayload && state.reviewPayload.extracted ? state.reviewPayload.extracted.confidence : null,
+        appName: state.reviewPayload && state.reviewPayload.extracted ? state.reviewPayload.extracted.appName : null,
+        warnings: state.reviewPayload && state.reviewPayload.extracted ? (state.reviewPayload.extracted.warnings || []) : []
+      };
+
+      if (!review.runningDate) return showError('달린 날짜를 입력해주세요.');
+      if (!Number(review.distanceKm)) return showError('달린 거리(km)를 입력해주세요.');
+      if (minutes <= 0 && secondsPart <= 0) return showError('달린 시간(분/초)을 입력해주세요.');
+      if (secondsPart < 0 || secondsPart > 59) return showError('초는 0~59 사이로 입력해주세요.');
+
+      const payload = {
+        participantId: state.selectedParticipantId,
+        dataUrl: state.selectedImage.dataUrl,
+        fileName: state.selectedImage.fileName,
+        proofPhotoDataUrl: state.selectedProofPhoto ? state.selectedProofPhoto.dataUrl : '',
+        proofPhotoFileName: state.selectedProofPhoto ? state.selectedProofPhoto.fileName : '',
+        proofPhotoPublic: Boolean(state.selectedProofPhoto && state.proofPhotoPublic),
+        mode: mode === 'manual' || mode === 'manual-duplicate' ? 'manual' : 'review',
+        allowSimilarDuplicate: mode === 'duplicate' || mode === 'manual-duplicate',
+        rawExtracted: state.reviewPayload ? state.reviewPayload.rawExtracted : null,
+        review,
+        note: ''
+      };
+
+      state.isUploading = true;
+      updateSubmitState();
+      setStatus('info', '확인한 기록을 저장하고 있어요 🌿');
+      google.script.run
+        .withSuccessHandler((res) => {
+          state.isUploading = false;
+          updateSubmitState();
+          if (!res || !res.ok) return showError(res && res.error ? res.error : '저장에 실패했어요.');
+          if (res.duplicate) {
+            setStatus('info', res.message || '이미 업로드된 사진이에요.');
+            if (res.dashboard) renderDashboard(res.dashboard);
+            return;
+          }
+          if (res.needsDuplicateConfirm) {
+            setStatus('warning', res.message || '비슷한 기록이 있어요. 중복이 아니면 한 번 더 확인해주세요.');
+            renderReviewForm(Object.assign({}, res.extracted || review, {
+              rawExtracted: res.rawExtracted || null,
+              suspectedDuplicate: res.suspectedDuplicate || null
+            }), mode === 'manual' ? 'manual-duplicate' : 'duplicate');
+            return;
+          }
+          setStatus('success', res.message || '저장 완료!');
+          triggerCelebration('러닝 저장 완료');
+          if (res.dashboard) renderDashboard(res.dashboard);
+          renderResult(res.extracted || res.record || {}, res.dashboard || state.dashboard);
+          ensureSelectedPersonalStatsLoaded(true);
+        })
+        .withFailureHandler((err) => {
+          state.isUploading = false;
+          updateSubmitState();
+          showError(errorMessage(err));
+        })
+        .saveReviewedRun(payload);
+    }
+
+    function resetReviewForm() {
+      state.reviewPayload = null;
+      $('result').style.display = 'none';
+      $('result').innerHTML = '';
+      setStatus('info', '다른 사진을 선택해서 다시 시도해주세요 📸');
+    }
+
+    function compressionSavingText(originalBytes, compressedBytes) {
+      const original = Number(originalBytes || 0);
+      const compressed = Number(compressedBytes || 0);
+      if (!original || !compressed || compressed >= original) return '모바일 최적화';
+      const saved = Math.max(0, Math.round((1 - compressed / original) * 100));
+      return `${saved}% 가볍게`;
+    }
+
+    function renderResult(data, dashboard) {
+      const metrics = [
+        ['거리', data.distanceKm ? `${data.distanceKm} km` : '-'],
+        ['시간', data.durationText || secondsToDuration(data.durationSeconds) || '-'],
+        ['페이스', data.averagePaceText || secondsToPace(data.averagePaceSecondsPerKm) || '-'],
+        ['칼로리', data.caloriesKcal ? `${data.caloriesKcal} kcal` : '-'],
+        ['앱', data.appName || '-'],
+        ['신뢰도', data.confidence !== null && data.confidence !== undefined ? `${Math.round(Number(data.confidence) * 100)}%` : '-'],
+        ['저장방식', data.inputMode || '-']
+      ];
+      $('result').innerHTML = uploadCompletionSummaryHtml(data, dashboard) + metrics.map(([k, v]) => `
+        <div class="metric"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div></div>
+      `).join('');
+      $('result').style.display = 'grid';
+    }
+
+    function uploadCompletionSummaryHtml(record, dashboard) {
+      const person = state.participants.find(p => p.id === state.selectedParticipantId) || {};
+      const progress = dashboard && Array.isArray(dashboard.weeklyProgress)
+        ? dashboard.weeklyProgress.find(row => String(row.participantId || '') === String(state.selectedParticipantId))
+        : null;
+      const distance = Number(record && record.distanceKm || 0);
+      const weeklyKm = progress ? Number(progress.distanceKm || 0) : distance;
+      const goalKm = progress ? Number(progress.goalKm || progress.defaultGoalKm || dashboard.weeklyGoalKm || 0) : 0;
+      const percent = goalKm ? Number(progress && progress.percent || (weeklyKm / goalKm * 100)) : 0;
+      const remaining = goalKm ? Math.max(0, goalKm - weeklyKm) : 0;
+      const activeDays = Number(progress && progress.activeDays || 0);
+      const message = goalKm
+        ? (percent >= 100 ? '이번 주 목표를 달성했어요. 멋지게 쌓였어요!' : `이번 주 목표까지 ${remaining.toFixed(2)}km 남았어요.`)
+        : '이번 주 기록에 바로 반영됐어요.';
+      const reflected = goalKm
+        ? `오늘 기록에 반영됐어요 · 이번 주 누적 ${weeklyKm.toFixed(2)}km · 목표 ${percent.toFixed(1)}%`
+        : `오늘 기록에 반영됐어요 · 이번 주 누적 ${weeklyKm.toFixed(2)}km`;
+      const streak = activeDays >= 2 ? `이번 주 ${activeDays}일 러닝 중이에요 🌿` : '이번 주 기록이 하나 더 쌓였어요 🌱';
+      return `
+        <div class="completion-summary">
+          <div>
+            <strong>${displayEmoji(person)} 저장 완료</strong>
+            <span>${escapeHtml(reflected)}</span>
+            <small class="completion-detail">${escapeHtml(streak)}</small>
+          </div>
+          <b>${escapeHtml(message)}</b>
+        </div>
+      `;
+    }
+</script>
