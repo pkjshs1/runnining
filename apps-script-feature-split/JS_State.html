@@ -1,0 +1,31 @@
+<script>
+const state = {
+      participants: [],
+      selectedParticipantId: '',
+      selectedImage: null,
+      selectedProofPhoto: null,
+      proofPhotoPublic: false,
+      maxUploadBytes: 8 * 1024 * 1024,
+      isUploading: false,
+      reviewPayload: null,
+      dashboard: null,
+      announcement: null,
+      announcementExpiryTimer: 0,
+      personalStatsOpen: false,
+      pendingGoalCelebrationFor: '',
+      dashboardRecordView: 'today',
+      rankTab: 'week',
+      openDashboardSections: {},
+      proofPhotoDataCache: {},
+      proofLoadTimer: 0,
+      memberStatuses: {},
+      adminData: null,
+      myRecords: [],
+      loadingPersonalStatsFor: '',
+      isDashboardOnly: new URLSearchParams(location.search).get('view') === 'dashboard',
+      isAdminView: new URLSearchParams(location.search).get('admin') === '1'
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const FALLBACK_EMOJIS = ['🌼','🌸','🌷','🌻','🌺','🪻','🍀','🌿','🌱','🍓','🍑','🍊','🍋','🍒','🐰','🐻','🐼','🐨','🐹','🐱','🐶','🦊','🐧','🐥','🦄','🐢','🐬','🦋','🐝','🐞','⭐','🌙','☁️','🌈','✨','💫','🫧','🎀','🧸','🎈','🚲','👟'];
+    </script>
